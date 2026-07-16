@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SyncClipboard</string>
+    <string name="app_description">LSPosed module for silent clipboard sync</string>
+
+    <!-- Activities -->
+    <string name="activity_settings">Settings</string>
+    <string name="activity_server_config">Server Configuration</string>
+    <string name="activity_history">Clipboard History</string>
+    <string name="activity_about">About</string>
+
+    <!-- Module Status -->
+    <string name="module_status_activated">Module Activated</string>
+    <string name="module_status_not_activated">Module Not Activated</string>
+    <string name="module_status_connecting">Connecting…</string>
+    <string name="module_status_waiting_for_reboot">Update installed — reboot required</string>
+    <string name="module_status_system_ui_safe_mode">System UI safe mode — hooks disabled</string>
+    <string name="module_status_summary">Version %s</string>
+
+    <!-- Actions -->
+    <string name="action_restart">Restart</string>
+    <string name="action_sync_now">Sync Now</string>
+    <string name="action_upload_now">Upload Now</string>
+    <string name="action_test_connection">Test Connection</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_save">Save</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_add">Add</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_back">Back</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_restart_app">Restart App</string>
+    <string name="action_restart_systemui">Restart SystemUI</string>
+    <string name="restart_no_root">Root permission required</string>
+    <string name="action_view">View</string>
+    <string name="action_share">Share</string>
+    <string name="action_download">Save</string>
+    <string name="action_close">Close</string>
+    <string name="action_confirm">OK</string>
+    <string name="action_copy">Copy</string>
+
+    <!-- Restart -->
+    <string name="restart_system_ui">Restart System UI</string>
+    <string name="restart_app">Restart App</string>
+    <string name="restart_fail">Restart Failed</string>
+    <string name="message_app_restart_fail">Failed to restart. Please try manually.</string>
+    <string name="ok">OK</string>
+
+    <!-- Server Config -->
+    <string name="server_type_syncclipboard">SyncClipboard Server</string>
+    <string name="server_type_webdav">WebDAV</string>
+    <string name="server_type_s3">S3 Compatible</string>
+    <string name="server_url">Server URL</string>
+    <string name="server_username">Username</string>
+    <string name="server_password">Password</string>
+    <string name="server_name">Display Name</string>
+    <string name="server_region">Region</string>
+    <string name="server_bucket">Bucket Name</string>
+    <string name="server_prefix">Object Prefix</string>
+    <string name="server_path_style">Force Path Style</string>
+    <string name="server_add">Add Server</string>
+    <string name="server_edit">Edit Server</string>
+    <string name="server_delete">Delete Server</string>
+    <string name="server_delete_confirm">Delete server \"%s\"?</string>
+    <string name="server_test_success">Connection successful</string>
+    <string name="server_test_fail">Connection failed</string>
+    <string name="server_testing">Testing…</string>
+    <string name="server_test_cancel">Cancel Test</string>
+    <string name="no_server_configured">No servers configured</string>
+    <string name="no_server_hint">Tap + to add your first server</string>
+    <string name="server_active">Active</string>
+    <string name="server_set_active">Set as active server</string>
+    <string name="server_url_required">Server URL is required</string>
+    <string name="server_username_required">Username is required</string>
+    <string name="server_password_required">Password is required</string>
+    <string name="server_bucket_required">Bucket name is required</string>
+    <string name="server_access_key_required">Access Key ID is required</string>
+    <string name="server_secret_key_required">Secret Access Key is required</string>
+    <string name="server_type_label">Server Type</string>
+    <string name="server_type_syncclipboard_desc">Official standalone server or client built-in server</string>
+    <string name="server_type_webdav_desc">Cloud storage supporting WebDAV protocol</string>
+    <string name="server_type_s3_desc">AWS S3 / MinIO / Cloudflare R2, etc.</string>
+    <string name="server_section_connection">Connection</string>
+    <string name="server_section_s3">S3 Settings</string>
+    <string name="server_section_actions">Actions</string>
+    <string name="server_name_hint">Optional display name</string>
+    <string name="server_url_hint">https://example.com</string>
+    <string name="server_region_hint">us-east-1</string>
+    <string name="server_bucket_hint">my-bucket</string>
+    <string name="server_prefix_hint">syncclipboard/</string>
+
+    <!-- Theme -->
+    <string name="setting_theme_mode">Theme Mode</string>
+    <string name="setting_theme_color">Theme Color</string>
+    <string name="setting_theme_color_summary">Choose accent color for the app</string>
+    <string name="setting_theme_monet">Dynamic Color</string>
+    <string name="setting_theme_monet_summary">Use system wallpaper colors (Android 12+)</string>
+    <string name="option_theme_system">Follow System</string>
+    <string name="option_theme_light">Light</string>
+    <string name="option_theme_dark">Dark</string>
+
+    <!-- Sync Settings -->
+    <string name="setting_auto_sync">Auto Sync</string>
+    <string name="setting_auto_sync_summary">Automatically sync clipboard in background</string>
+    <string name="setting_background_upload">Background Upload</string>
+    <string name="setting_background_upload_summary">Auto-upload clipboard changes when idle</string>
+    <string name="setting_background_download">Background Download</string>
+    <string name="setting_background_download_summary">Auto-download remote clipboard changes</string>
+    <string name="setting_polling_section">Polling</string>
+    <string name="setting_stop_polling_battery_saver">Stop Polling in Battery Saver</string>
+    <string name="setting_stop_polling_battery_saver_summary">Pause remote polling when battery saver is on</string>
+    <string name="setting_stop_polling_screen_off">Stop Polling When Screen Off</string>
+    <string name="setting_stop_polling_screen_off_summary">Pause remote polling when the screen is off</string>
+    <string name="setting_polling_interval">Polling Interval</string>
+    <string name="setting_polling_interval_summary">Fetch remote clipboard every %1$d seconds</string>
+    <string name="setting_history_sync">History Sync</string>
+    <string name="setting_history_sync_summary">Sync clipboard history with server</string>
+    <string name="setting_auto_download_max_size">Auto-download Max Size</string>
+    <string name="setting_auto_download_max_size_summary">Maximum file size for auto-download (MB)</string>
+    <string name="setting_log_level">Log Level</string>
+    <string name="setting_enable_logging">Enable Logging</string>
+    <string name="setting_enable_logging_summary">Output detailed logs to logcat (Warn/Error always shown when off)</string>
+    <string name="setting_auto_save">Auto Save Files</string>
+    <string name="setting_auto_save_summary">Automatically save synced images to gallery and files to downloads</string>
+    <string name="setting_sms_upload">Upload SMS Codes</string>
+    <string name="setting_sms_upload_summary">Auto-upload SMS verification codes to the clipboard server</string>
+    <string name="setting_language">Language</string>
+    <string name="setting_language_auto">Follow system</string>
+    <string name="setting_language_zh">中文</string>
+    <string name="setting_language_en">English</string>
+    <string name="setting_sync_settings">Sync Settings</string>
+    <string name="setting_background_settings">Background Settings</string>
+    <string name="setting_history_settings">History Settings</string>
+    <string name="setting_cache">Cache</string>
+    <string name="setting_cache_summary">Cache used: %1$s</string>
+    <string name="setting_cache_cleared">Cache cleared</string>
+    <string name="setting_cache_clear">Clear</string>
+
+    <!-- Items -->
+    <string name="item_server_settings">Server Configuration</string>
+    <string name="item_server_settings_summary">Add and manage sync servers</string>
+    <string name="item_sync_settings">Settings</string>
+    <string name="item_sync_settings_summary">Configure sync behavior</string>
+    <string name="item_history">Clipboard History</string>
+    <string name="item_history_summary">View synced clipboard history</string>
+    <string name="item_log">Logs</string>
+    <string name="item_log_summary">View sync engine logs</string>
+    <string name="item_more">More</string>
+    <string name="item_more_summary">Settings, history, logs, about</string>
+    <string name="item_about_app">About</string>
+    <string name="item_about_app_summary">Version and license info</string>
+
+    <!-- Content Types -->
+    <string name="type_text">Text</string>
+    <string name="type_image">Image</string>
+    <string name="type_file">File</string>
+    <string name="type_group">Group</string>
+
+    <!-- Remote Content -->
+    <string name="main_remote_content">Server Latest Content</string>
+    <string name="main_loading">Loading…</string>
+    <string name="main_no_content">No content available</string>
+
+    <!-- Sync Status -->
+    <string name="sync_status_connected">Connected</string>
+    <string name="sync_status_disconnected">Disconnected</string>
+    <string name="sync_status_syncing">Syncing…</string>
+    <string name="sync_status_stopped">Stopped</string>
+    <string name="sync_status_unavailable">Unavailable</string>
+    <string name="sync_status_checking">Checking…</string>
+    <string name="sync_status_label">Sync Status: %s</string>
+
+    <!-- History -->
+    <string name="history_empty">No clipboard history yet</string>
+    <string name="history_copy">Copy to clipboard</string>
+    <string name="history_delete">Delete</string>
+    <string name="history_star">Star</string>
+    <string name="history_pin">Pin</string>
+    <string name="history_search">Search history…</string>
+    <string name="history_copied">Copied to clipboard</string>
+    <string name="history_cleared">History cleared</string>
+    <string name="history_no_results">No matching results</string>
+    <string name="history_page_prev">Prev</string>
+    <string name="history_page_next">Next</string>
+    <string name="history_page_indicator">Page %1$d / %2$d</string>
+    <string name="history_page_size">Per page</string>
+    <string name="history_page_size_50">50</string>
+    <string name="history_page_size_100">100</string>
+    <string name="history_total_count">Total %d items</string>
+    <string name="history_selected_count">%d selected</string>
+    <string name="history_delete_selected">Delete (%d)</string>
+
+    <!-- About -->
+    <string name="about_version">Version %s</string>
+    <string name="about_description">An LSPosed module for silent clipboard synchronization between devices.</string>
+    <string name="about_supported_backends">Supports SyncClipboard Server, WebDAV, and S3-compatible storage backends.</string>
+    <string name="about_how_it_works_title">How it works</string>
+    <string name="about_how_it_works_text">This module hooks into Android\'s ClipboardService at the system level to detect clipboard changes in real-time without polling. Changes are automatically synced to your configured server.</string>
+    <string name="about_license_title">License</string>
+    <string name="about_license_text">Apache License 2.0</string>
+    <string name="about_source_code">Source Code</string>
+
+    <!-- Main Screen -->
+    <string name="main_sync_status">Sync Status: %s</string>
+    <string name="main_sync_now_desc">Manually trigger clipboard sync</string>
+    <string name="main_upload_now_desc">Push current clipboard to server</string>
+    <string name="main_how_it_works_title">How it works</string>
+    <string name="main_how_it_works_text">This LSPosed module hooks into ClipboardManager to detect clipboard changes instantly without polling. Changes are synced to your configured server (SyncClipboard, WebDAV, or S3).</string>
+
+    <!-- Language codes array -->
+    <string-array name="language_codes">
+        <item>zh</item>
+        <item>en</item>
+    </string-array>
+</resources>
