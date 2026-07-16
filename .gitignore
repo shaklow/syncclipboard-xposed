@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Android
+local.properties
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+
+# Keystore（如果你之后添加正式签名配置请确保不提交）
+*.keystore
+*.jks
+
+# 编译缓存
+.cxx/
+.externalNativeBuild/
+captures/

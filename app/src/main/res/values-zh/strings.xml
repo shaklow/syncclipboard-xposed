@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SyncClipboard</string>
+    <string name="app_description">用于静默剪贴板同步的 LSPosed 模块</string>
+
+    <!-- Activities -->
+    <string name="activity_settings">设置</string>
+    <string name="activity_server_config">服务器配置</string>
+    <string name="activity_history">剪贴板历史</string>
+    <string name="activity_about">关于</string>
+
+    <!-- Module Status -->
+    <string name="module_status_activated">模块已激活</string>
+    <string name="module_status_not_activated">模块未激活</string>
+    <string name="module_status_connecting">连接中…</string>
+    <string name="module_status_waiting_for_reboot">更新已安装 — 需要重启</string>
+    <string name="module_status_system_ui_safe_mode">System UI 安全模式 — 钩子已禁用</string>
+    <string name="module_status_summary">版本 %s</string>
+
+    <!-- Actions -->
+    <string name="action_restart">重启</string>
+    <string name="action_sync_now">立即同步</string>
+    <string name="action_upload_now">立即上传</string>
+    <string name="action_test_connection">测试连接</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_save">保存</string>
+    <string name="action_delete">删除</string>
+    <string name="action_clear">清空</string>
+    <string name="action_add">添加</string>
+    <string name="action_edit">编辑</string>
+    <string name="action_back">返回</string>
+    <string name="action_refresh">刷新</string>
+    <string name="action_restart_app">重启软件</string>
+    <string name="action_restart_systemui">重启系统界面</string>
+    <string name="restart_no_root">需要Root权限</string>
+    <string name="action_view">查看</string>
+    <string name="action_share">分享</string>
+    <string name="action_download">保存</string>
+    <string name="action_close">关闭</string>
+    <string name="action_confirm">确定</string>
+    <string name="action_copy">复制</string>
+
+    <!-- Restart -->
+    <string name="restart_system_ui">重启 System UI</string>
+    <string name="restart_app">重启应用</string>
+    <string name="restart_fail">重启失败</string>
+    <string name="message_app_restart_fail">重启失败，请手动重试。</string>
+    <string name="ok">确定</string>
+
+    <!-- Server Config -->
+    <string name="server_type_syncclipboard">SyncClipboard 服务器</string>
+    <string name="server_type_webdav">WebDAV</string>
+    <string name="server_type_s3">S3 兼容存储</string>
+    <string name="server_url">服务器地址</string>
+    <string name="server_username">用户名</string>
+    <string name="server_password">密码</string>
+    <string name="server_name">显示名称</string>
+    <string name="server_region">区域</string>
+    <string name="server_bucket">存储桶名称</string>
+    <string name="server_prefix">对象前缀</string>
+    <string name="server_path_style">路径风格寻址</string>
+    <string name="server_add">添加服务器</string>
+    <string name="server_edit">编辑服务器</string>
+    <string name="server_delete">删除服务器</string>
+    <string name="server_delete_confirm">确定要删除服务器 \"%s\" 吗？</string>
+    <string name="server_test_success">连接成功</string>
+    <string name="server_test_fail">连接失败</string>
+    <string name="server_testing">测试中…</string>
+    <string name="server_test_cancel">取消测试</string>
+    <string name="no_server_configured">还没有配置服务器</string>
+    <string name="no_server_hint">点击 + 添加第一个服务器</string>
+    <string name="server_active">当前使用</string>
+    <string name="server_set_active">设为当前服务器</string>
+    <string name="server_url_required">请输入服务器地址</string>
+    <string name="server_username_required">请输入用户名</string>
+    <string name="server_password_required">请输入密码</string>
+    <string name="server_bucket_required">请输入存储桶名称</string>
+    <string name="server_access_key_required">请输入 Access Key ID</string>
+    <string name="server_secret_key_required">请输入 Secret Access Key</string>
+    <string name="server_type_label">服务器类型</string>
+    <string name="server_type_syncclipboard_desc">官方独立服务器或客户端内置服务器</string>
+    <string name="server_type_webdav_desc">支持 WebDAV 协议的云存储服务</string>
+    <string name="server_type_s3_desc">AWS S3 / MinIO / Cloudflare R2 等</string>
+    <string name="server_section_connection">连接信息</string>
+    <string name="server_section_s3">S3 设置</string>
+    <string name="server_section_actions">操作</string>
+    <string name="server_name_hint">可选，用于卡片显示</string>
+    <string name="server_url_hint">https://example.com</string>
+    <string name="server_region_hint">us-east-1</string>
+    <string name="server_bucket_hint">my-bucket</string>
+    <string name="server_prefix_hint">syncclipboard/</string>
+
+    <!-- Theme -->
+    <string name="setting_theme_mode">主题模式</string>
+    <string name="setting_theme_color">主题颜色</string>
+    <string name="setting_theme_color_summary">选择应用强调色</string>
+    <string name="setting_theme_monet">动态取色</string>
+    <string name="setting_theme_monet_summary">使用系统壁纸颜色（Android 12+）</string>
+    <string name="option_theme_system">跟随系统</string>
+    <string name="option_theme_light">浅色</string>
+    <string name="option_theme_dark">深色</string>
+
+    <!-- Sync Settings -->
+    <string name="setting_auto_sync">自动同步</string>
+    <string name="setting_auto_sync_summary">在后台自动同步剪贴板</string>
+    <string name="setting_background_upload">后台上传</string>
+    <string name="setting_background_upload_summary">空闲时自动上传剪贴板变更</string>
+    <string name="setting_background_download">后台下载</string>
+    <string name="setting_background_download_summary">自动下载远程剪贴板变更</string>
+    <string name="setting_polling_section">轮询设置</string>
+    <string name="setting_stop_polling_battery_saver">省电模式停止轮询</string>
+    <string name="setting_stop_polling_battery_saver_summary">省电模式下暂停远程轮询</string>
+    <string name="setting_stop_polling_screen_off">熄屏停止轮询</string>
+    <string name="setting_stop_polling_screen_off_summary">屏幕关闭时暂停远程轮询</string>
+    <string name="setting_polling_interval">轮询间隔</string>
+    <string name="setting_polling_interval_summary">每 %1$d 秒查询一次远程剪贴板</string>
+    <string name="setting_history_sync">历史记录同步</string>
+    <string name="setting_history_sync_summary">将剪贴板历史同步到服务器</string>
+    <string name="setting_auto_download_max_size">自动下载最大大小</string>
+    <string name="setting_auto_download_max_size_summary">自动下载的最大文件大小（MB）</string>
+    <string name="setting_log_level">日志等级</string>
+    <string name="setting_enable_logging">启用日志</string>
+    <string name="setting_enable_logging_summary">输出详细日志到 logcat（关闭后仍显示警告/错误）</string>
+    <string name="setting_auto_save">自动保存文件</string>
+    <string name="setting_auto_save_summary">自动将同步的图片保存到相册，文件保存到下载目录</string>
+    <string name="setting_sms_upload">自动上传验证码</string>
+    <string name="setting_sms_upload_summary">收到含验证码的短信时，自动提取并上传到剪贴板服务器</string>
+    <string name="setting_language">语言</string>
+    <string name="setting_language_auto">跟随系统</string>
+    <string name="setting_language_zh">中文</string>
+    <string name="setting_language_en">English</string>
+    <string name="setting_sync_settings">同步设置</string>
+    <string name="setting_background_settings">后台设置</string>
+    <string name="setting_history_settings">历史设置</string>
+    <string name="setting_cache">缓存</string>
+    <string name="setting_cache_summary">已占用：%1$s</string>
+    <string name="setting_cache_cleared">缓存已清除</string>
+    <string name="setting_cache_clear">清除</string>
+
+    <!-- Items -->
+    <string name="item_server_settings">服务器配置</string>
+    <string name="item_server_settings_summary">添加和管理同步服务器</string>
+    <string name="item_sync_settings">设置</string>
+    <string name="item_sync_settings_summary">配置同步行为</string>
+    <string name="item_history">剪贴板历史</string>
+    <string name="item_history_summary">查看已同步的剪贴板历史</string>
+    <string name="item_log">日志</string>
+    <string name="item_log_summary">查看同步引擎运行日志</string>
+    <string name="item_more">其他</string>
+    <string name="item_more_summary">设置、历史、日志、关于</string>
+    <string name="item_about_app">关于</string>
+    <string name="item_about_app_summary">版本和许可信息</string>
+
+    <!-- 内容类型 -->
+    <string name="type_text">文本</string>
+    <string name="type_image">图片</string>
+    <string name="type_file">文件</string>
+    <string name="type_group">分组</string>
+
+    <!-- 远程内容 -->
+    <string name="main_remote_content">服务器最新内容</string>
+    <string name="main_loading">加载中…</string>
+    <string name="main_no_content">暂无内容</string>
+
+    <!-- Sync Status -->
+    <string name="sync_status_running">运行中</string>
+    <string name="sync_status_stopped">已停止</string>
+    <string name="sync_status_checking">检查中…</string>
+    <string name="sync_status_unavailable">不可用</string>
+
+    <!-- History -->
+    <string name="history_empty">暂无剪贴板历史</string>
+    <string name="history_copy">复制到剪贴板</string>
+    <string name="history_delete">删除</string>
+    <string name="history_star">收藏</string>
+    <string name="history_pin">置顶</string>
+    <string name="history_search">搜索历史…</string>
+    <string name="history_copied">已复制到剪贴板</string>
+    <string name="history_cleared">历史已清空</string>
+    <string name="history_no_results">无匹配结果</string>
+    <string name="history_page_prev">上一页</string>
+    <string name="history_page_next">下一页</string>
+    <string name="history_page_indicator">第 %1$d / %2$d 页</string>
+    <string name="history_page_size">每页</string>
+    <string name="history_total_count">共 %d 条</string>
+    <string name="history_selected_count">已选 %d 项</string>
+    <string name="history_delete_selected">删除 (%d)</string>
+
+    <!-- About -->
+    <string name="about_version">版本 %s</string>
+    <string name="about_description">用于设备间静默剪贴板同步的 LSPosed 模块。</string>
+    <string name="about_supported_backends">支持 SyncClipboard Server、WebDAV 和 S3 兼容存储后端。</string>
+    <string name="about_how_it_works_title">工作原理</string>
+    <string name="about_how_it_works_text">此模块在系统层面钩入 Android 的 ClipboardService，无需轮询即可实时检测剪贴板变更。变更会自动同步到您配置的服务器。</string>
+    <string name="about_license_title">许可协议</string>
+    <string name="about_license_text">Apache License 2.0</string>
+    <string name="about_source_code">源代码</string>
+
+    <!-- Main Screen -->
+    <string name="main_sync_status">同步状态: %s</string>
+    <string name="main_sync_now_desc">手动触发剪贴板同步</string>
+    <string name="main_upload_now_desc">推送当前剪贴板到服务器</string>
+    <string name="main_how_it_works_title">工作原理</string>
+    <string name="main_how_it_works_text">此 LSPosed 模块钩入 ClipboardManager，无需轮询即可实时检测剪贴板变更。变更会同步到您配置的服务器（SyncClipboard、WebDAV 或 S3）。</string>
+</resources>
