@@ -37,12 +37,28 @@ clipboard-xposed/
 
 ## Build
 
-Requirements: JDK 21, Android SDK (API 37)
+**Requirements:**
+- JDK 17 or newer (`java -version`)
+- Android SDK with API 37 — set via `ANDROID_HOME` environment variable, or create `local.properties`:
+  ```
+  sdk.dir=/path/to/android-sdk        # Linux/macOS
+  sdk.dir=C\:\\Users\\you\\AppData\\Local\\Android\\Sdk  # Windows
+  ```
+- The debug keystore (`~/.android/debug.keystore`) is **auto-generated** by the build if it doesn't exist — no manual setup needed.
+
+**Build commands:**
 
 ```bash
+# Linux / macOS
 ./gradlew shell:assembleRelease
-# APK → build/all-apks/release/shell-<version>-release.apk
+
+# Windows
+gradlew.bat shell:assembleRelease
 ```
+
+Output APK: `build/all-apks/release/shell-<version>-release.apk`
+
+> The release APK is signed with the standard Android debug key (for sideloading). To use a custom keystore, edit `shell/build.gradle.kts` → `signingConfigs`.
 
 ## Architecture
 

@@ -46,6 +46,33 @@ configure<ApplicationExtension> {
         }
     }
 
+    // 构建前自动生成 debug keystore（keytool 由 JDK 提供，Linux/Windows 通用）
+    val ensureDebugKeystore by tasks.registering {
+        val keystoreFile = File(System.getProperty("user.home"), ".android/debug.keystore")
+        outputs.file(keystoreFile)
+        doFirst {
+            if (!keystoreFile.exists()) {
+                keystoreFile.parentFile.mkdirs()
+                exec {
+                    commandLine(
+                        "keytool", "-genkeypair", "-v",
+                        "-keystore", keystoreFile.absolutePath,
+                        "-storepass", "android",
+                        "-alias", "androiddebugkey",
+                        "-keypass", "android",
+                        "-dname", "CN=Android Debug,O=Android,C=US",
+                        "-keyalg", "RSA", "-keysize", "2048",
+                        "-validity", "10000"
+                    )
+                }
+                println("--- [Keystore] debug keystore created at ${keystoreFile.absolutePath} ---")
+            }
+        }
+    }
+
+    tasks.matching { it.name.startsWith("package") && it.name.contains("Release") }
+        .configureEach { dependsOn(ensureDebugKeystore) }
+
     buildTypes {
         release {
             isMinifyEnabled = false
