@@ -4,6 +4,36 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// 构建前自动生成 debug keystore（keytool 由 JDK 提供，Linux/Windows 通用）
+val ensureDebugKeystore by tasks.registering {
+    val keystoreFile = File(System.getProperty("user.home"), ".android/debug.keystore")
+    outputs.file(keystoreFile)
+    doFirst {
+        if (!keystoreFile.exists()) {
+            keystoreFile.parentFile.mkdirs()
+            val process = ProcessBuilder(
+                "keytool", "-genkeypair", "-v",
+                "-keystore", keystoreFile.absolutePath,
+                "-storepass", "android",
+                "-alias", "androiddebugkey",
+                "-keypass", "android",
+                "-dname", "CN=Android Debug,O=Android,C=US",
+                "-keyalg", "RSA", "-keysize", "2048",
+                "-validity", "10000"
+            ).inheritIO().start()
+            val exitCode = process.waitFor()
+            if (exitCode == 0) {
+                println("--- [Keystore] debug keystore created at ${keystoreFile.absolutePath} ---")
+            } else {
+                throw GradleException("keytool failed with exit code $exitCode")
+            }
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith("package") && it.name.contains("Release") }
+    .configureEach { dependsOn(ensureDebugKeystore) }
+
 configure<ApplicationExtension> {
     namespace = rootProject.extra["appPackageName"] as String
 
@@ -45,33 +75,6 @@ configure<ApplicationExtension> {
             keyPassword = "android"
         }
     }
-
-    // 构建前自动生成 debug keystore（keytool 由 JDK 提供，Linux/Windows 通用）
-    val ensureDebugKeystore by tasks.registering {
-        val keystoreFile = File(System.getProperty("user.home"), ".android/debug.keystore")
-        outputs.file(keystoreFile)
-        doFirst {
-            if (!keystoreFile.exists()) {
-                keystoreFile.parentFile.mkdirs()
-                exec {
-                    commandLine(
-                        "keytool", "-genkeypair", "-v",
-                        "-keystore", keystoreFile.absolutePath,
-                        "-storepass", "android",
-                        "-alias", "androiddebugkey",
-                        "-keypass", "android",
-                        "-dname", "CN=Android Debug,O=Android,C=US",
-                        "-keyalg", "RSA", "-keysize", "2048",
-                        "-validity", "10000"
-                    )
-                }
-                println("--- [Keystore] debug keystore created at ${keystoreFile.absolutePath} ---")
-            }
-        }
-    }
-
-    tasks.matching { it.name.startsWith("package") && it.name.contains("Release") }
-        .configureEach { dependsOn(ensureDebugKeystore) }
 
     buildTypes {
         release {
