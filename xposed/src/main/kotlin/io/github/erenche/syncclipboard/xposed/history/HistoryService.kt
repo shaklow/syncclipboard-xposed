@@ -26,6 +26,8 @@ import java.util.UUID
  */
 class HistoryService(context: Context) {
 
+    private val ctx: Context = context.applicationContext
+
     companion object {
         private const val TAG = "HistoryService"
         private const val MAX_ITEMS = 1000
@@ -163,7 +165,7 @@ class HistoryService(context: Context) {
         return try {
             val bytes: ByteArray? = if (fileUri.startsWith("content://")) {
                 val uri = android.net.Uri.parse(fileUri)
-                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             } else {
                 val f = java.io.File(fileUri)
                 if (f.exists()) f.readBytes() else null
