@@ -594,7 +594,10 @@ class SyncEngine private constructor() {
             lastSyncTime = System.currentTimeMillis()
             appContext?.let { Prefs.saveHistoryLastSyncTime(it, lastSyncTime) }
 
-            return SyncHistoryResult(true, allRecords.size, null)
+            // 仅统计活跃记录：服务器返回值含软删除墓碑（isDeleted==true），
+            // 这些记录不会加入本地列表，若计入会导致"服务器数量"远大于实际可见数量
+            val activeFetched = allRecords.count { it.isDeleted != true }
+            return SyncHistoryResult(true, activeFetched, null)
         } catch (e: Exception) {
             Logger.warn(TAG, "syncHistory failed: ${e.message}", e)
             return SyncHistoryResult(false, 0, e.message ?: "Unknown error")
