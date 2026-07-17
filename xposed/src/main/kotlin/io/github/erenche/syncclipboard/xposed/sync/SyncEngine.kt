@@ -332,10 +332,12 @@ class SyncEngine private constructor() {
         // 仅在已初始化的进程（SystemUI）中处理，App 进程的未初始化实例直接跳过
         if (appContext == null) return
 
+        // 文本用内容 hash 去重；图片/文件用 fileUri 去重（text 为空，无法区分不同文件）
         val hash = content.profileHash
-            ?: HashUtils.sha256(content.text)
+            ?: if (content.hasData && content.fileUri != null) HashUtils.sha256(content.fileUri!!)
+            else HashUtils.sha256(content.text)
 
-        if (!force && hash == lastLocalHash) return
+        if (!force && hash.equals(lastLocalHash, ignoreCase = true)) return
         lastLocalHash = hash
 
         scope.launch {
@@ -776,8 +778,8 @@ class SyncEngine private constructor() {
             client.putContent(uploadContent)
             lastSyncTime = System.currentTimeMillis()
             // 设置 lastRemoteHash，防止轮询循环立即下载刚上传的内容
-            val profileHash = HashUtils.sha256(content.text)
-            lastRemoteHash = profileHash
+            // 使用 uploadContent（已将 content:// 转为本地路径）保证文件 hash 可读
+            lastRemoteHash = HashUtils.computeContentHash(uploadContent)
             Logger.info(TAG, "Content uploaded successfully")
             return true
         } catch (e: Exception) {

@@ -76,7 +76,7 @@ class HistoryService(context: Context) {
      */
     fun addLocalContent(content: ClipboardContent) {
         // 统一使用小写存储，与 mergeFromServerDtos 的 lowercase() 比较保持一致
-        val hash = (content.profileHash ?: HashUtils.sha256(content.text)).lowercase()
+        val hash = (content.profileHash ?: computeHashForContent(content)).lowercase()
         Logger.info(TAG, "addLocalContent: type=${content.type}, hash=$hash, text=${content.text.take(50)}, hasData=${content.hasData}")
         synchronized(lock) {
             val existing = _items.value.find { it.profileHash == hash && !it.isDeleted }
@@ -142,6 +142,37 @@ class HistoryService(context: Context) {
                 ))
                 trimIfNeeded()
             }
+        }
+    }
+
+    /**
+     * 按服务器规则计算内容 hash（与 HashUtils.computeContentHash 对齐，额外支持 content:// URI）。
+     *
+     * - Text → sha256(text)
+     * - Image/File，绝对路径 → computeFileHash（由 HashUtils.computeContentHash 处理）
+     * - Image/File，content:// URI → 用 ContentResolver 读取字节后 computeFileHash
+     * - 文件不可读/fileName 为空 → sha256(text)（降级，仅作占位）
+     */
+    private fun computeHashForContent(content: ClipboardContent): String {
+        if (content.type == ClipboardContentType.Text || !content.hasData ||
+            content.fileName.isNullOrBlank() || content.fileUri.isNullOrBlank()) {
+            return HashUtils.sha256(content.text)
+        }
+        val fileUri = content.fileUri!!
+        val fileName = content.fileName!!
+        return try {
+            val bytes: ByteArray? = if (fileUri.startsWith("content://")) {
+                val uri = android.net.Uri.parse(fileUri)
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } else {
+                val f = java.io.File(fileUri)
+                if (f.exists()) f.readBytes() else null
+            }
+            if (bytes != null) HashUtils.computeFileHash(fileName, bytes)
+            else HashUtils.sha256(content.text)
+        } catch (e: Exception) {
+            Logger.warn(TAG, "computeHashForContent: fallback to text hash: ${e.message}")
+            HashUtils.sha256(content.text)
         }
     }
 

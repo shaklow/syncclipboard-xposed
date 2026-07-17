@@ -133,7 +133,7 @@ class S3Client(
 
         val profile = ProfileDto(
             type = content.type,
-            hash = HashUtils.sha256(content.text),
+            hash = HashUtils.computeContentHash(content),
             text = content.text,
             hasData = content.hasData,
             dataName = content.fileName,

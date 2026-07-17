@@ -154,7 +154,7 @@ class SyncClipboardHttpClient(
         }
 
         // 计算 profile hash
-        val hash = HashUtils.sha256(content.text)
+        val hash = HashUtils.computeContentHash(content)
 
         // 上传 profile
         val profile = ProfileDto(
