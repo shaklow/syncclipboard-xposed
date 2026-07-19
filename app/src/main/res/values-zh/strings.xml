@@ -168,6 +168,9 @@
     <string name="sync_status_checking">检查中…</string>
     <string name="sync_status_unavailable">不可用</string>
 
+    <!-- 快捷设置磁贴 -->
+    <string name="tile_auto_sync">剪贴板同步</string>
+
     <!-- History -->
     <string name="history_empty">暂无剪贴板历史</string>
     <string name="history_copy">复制到剪贴板</string>

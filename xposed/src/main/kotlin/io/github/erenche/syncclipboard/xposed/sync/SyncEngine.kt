@@ -91,11 +91,21 @@ class SyncEngine private constructor() {
     /** 每次同步最多 PATCH 的记录数，避免单次同步耗时过长 */
     private val MAX_PATCH_PER_SYNC = 20
 
-    /** 连续失败次数。超过阈值后停止轮询，等待手动同步恢复 */
+    /** 连续失败次数。达到 [maxConsecutiveFailures] 后停止轮询，等待手动同步恢复。
+     *  失败时按 [retryBackoffMs] 退避重试。 */
     @Volatile
     private var consecutiveFailures: Int = 0
 
-    private val maxConsecutiveFailures: Int = 3
+    /** 失败重试退避间隔（毫秒）：30s, 60s, 2min, 5min */
+    private val retryBackoffMs = longArrayOf(
+        30_000L,
+        60_000L,
+        120_000L,
+        300_000L
+    )
+
+    /** 最大连续失败次数 = 原始失败 + 4 次退避重试全失败 */
+    private val maxConsecutiveFailures: Int = retryBackoffMs.size + 1
 
     fun initialize(context: Context) {
         if (appContext != null) {
@@ -164,6 +174,8 @@ class SyncEngine private constructor() {
                             isPollingActive = false
                             Logger.warn(TAG, "Polling stopped: $consecutiveFailures consecutive failures")
                             notifySyncStateChanged()
+                        } else if (consecutiveFailures <= retryBackoffMs.size) {
+                            Logger.info(TAG, "Remote fetch failed ($consecutiveFailures/${retryBackoffMs.size+1}), retry in ${retryBackoffMs[consecutiveFailures-1]}ms")
                         }
                     }
                     // 历史同步独立执行，不依赖于剪贴板同步成功
@@ -179,7 +191,13 @@ class SyncEngine private constructor() {
                         if (isConnected) isConnected = false
                     }
                 }
-                delay(pollingIntervalMs())
+                // 失败时按退避间隔重试；正常时使用配置的轮询间隔
+                val delayMs = if (consecutiveFailures in 1..retryBackoffMs.size) {
+                    retryBackoffMs[consecutiveFailures - 1]
+                } else {
+                    pollingIntervalMs()
+                }
+                delay(delayMs)
             }
         }
 
