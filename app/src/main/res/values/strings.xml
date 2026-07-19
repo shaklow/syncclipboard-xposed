@@ -168,6 +168,9 @@
     <string name="sync_status_checking">Checking…</string>
     <string name="sync_status_unavailable">Unavailable</string>
 
+    <!-- Quick Settings Tile -->
+    <string name="tile_auto_sync">Clipboard Sync</string>
+
     <!-- History -->
     <string name="history_empty">No clipboard history yet</string>
     <string name="history_copy">Copy to clipboard</string>
