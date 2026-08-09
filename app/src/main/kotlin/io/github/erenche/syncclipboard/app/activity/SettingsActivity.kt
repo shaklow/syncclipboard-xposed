@@ -537,15 +537,15 @@ fun SyncSettingsCard(context: android.content.Context) {
                         updatePollingInterval(intervalOptions[index])
                     }
                 )
-                // 短信验证码自动上传
-                SwitchPreference(
-                    checked = smsUpload,
-                    title = stringResource(R.string.setting_sms_upload),
-                    summary = stringResource(R.string.setting_sms_upload_summary),
-                    onCheckedChange = { toggleSmsUpload(it) }
-                )
             }
         }
+        // 短信验证码自动上传：不依赖自动同步总开关，关闭自动同步后仍可见
+        SwitchPreference(
+            checked = smsUpload,
+            title = stringResource(R.string.setting_sms_upload),
+            summary = stringResource(R.string.setting_sms_upload_summary),
+            onCheckedChange = { toggleSmsUpload(it) }
+        )
     }
 }
 
