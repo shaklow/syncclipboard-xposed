@@ -12,11 +12,19 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # 缺少 token 时直接跳过，避免构建完才发现无法发布
-    if: ${{ secrets.XPOSED_REPO_TOKEN != '' }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check token
+        env:
+          XPOSED_REPO_TOKEN: ${{ secrets.XPOSED_REPO_TOKEN }}
+        run: |
+          if [ -z "$XPOSED_REPO_TOKEN" ]; then
+            echo "::error::缺少 secret XPOSED_REPO_TOKEN，无法发布到 LSPosed 官方仓库。请在仓库 Settings → Secrets → Actions 添加。"
+            exit 1
+          fi
+          echo "XPOSED_REPO_TOKEN 已配置"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -75,6 +83,78 @@ jobs:
           echo "tag=$VERSION_CODE-$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "读取到版本: code=$VERSION_CODE name=$VERSION_NAME tag=$VERSION_CODE-$VERSION_NAME"
 
+      # ── 生成 changelog（从上一个 release tag 到 HEAD 的 commit 历史）──
+      - name: Generate changelog
+        id: changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: ${{ github.repository }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION_NAME: ${{ steps.ver.outputs.version_name }}
+        run: |
+          set -e
+          # 找上一个 release tag（按版本号倒序）
+          PREV_TAG=$(gh release list --repo "$SOURCE_REPO" --limit 50 --json tagName -q '.[].tagName' \
+            | grep -E '^[0-9]+-' | sort -t- -k1 -n -r | head -1 || true)
+          echo "上一个 release tag: ${PREV_TAG:-无}"
+
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE=""
+          fi
+
+          # 取 commit 历史，按 conventional commits 分类
+          if [ -n "$RANGE" ]; then
+            COMMITS=$(git log "$RANGE" --pretty=format:"%s" --no-merges 2>/dev/null || true)
+          else
+            COMMITS=$(git log --pretty=format:"%s" --no-merges 2>/dev/null || true)
+          fi
+
+          # 按类型分组
+          FEAT=$(echo "$COMMITS" | grep -iE '^feat' | sed -E 's/^feat(\([^)]+\))?:?\s*/- /' || true)
+          FIX=$(echo "$COMMITS" | grep -iE '^fix' | sed -E 's/^fix(\([^)]+\))?:?\s*/- /' || true)
+          REFACTOR=$(echo "$COMMITS" | grep -iE '^refactor' | sed -E 's/^refactor(\([^)]+\))?:?\s*/- /' || true)
+          PERF=$(echo "$COMMITS" | grep -iE '^perf' | sed -E 's/^perf(\([^)]+\))?:?\s*/- /' || true)
+          DOCS=$(echo "$COMMITS" | grep -iE '^docs' | sed -E 's/^docs(\([^)]+\))?:?\s*/- /' || true)
+          CHORE=$(echo "$COMMITS" | grep -iE '^(chore|ci|build)' | sed -E 's/^(chore|ci|build)(\([^)]+\))?:?\s*/- /' || true)
+          OTHER=$(echo "$COMMITS" | grep -ivE '^(feat|fix|refactor|perf|docs|chore|ci|build|Merge)' || true)
+
+          # 组装 changelog
+          {
+            echo "## v${VERSION_NAME}"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "自 \`${PREV_TAG}\` 以来的变更："
+            else
+              echo "首次发布。"
+            fi
+            echo ""
+
+            [ -n "$FEAT" ]     && { echo "### 新增"; echo "$FEAT"; echo ""; }
+            [ -n "$FIX" ]      && { echo "### 修复"; echo "$FIX"; echo ""; }
+            [ -n "$PERF" ]     && { echo "### 性能"; echo "$PERF"; echo ""; }
+            [ -n "$REFACTOR" ] && { echo "### 重构"; echo "$REFACTOR"; echo ""; }
+            [ -n "$DOCS" ]     && { echo "### 文档"; echo "$DOCS"; echo ""; }
+            [ -n "$CHORE" ]    && { echo "### 杂项"; echo "$CHORE"; echo ""; }
+            if [ -n "$OTHER" ]; then
+              echo "### 其他"; echo "$OTHER" | sed 's/^/- /'; echo "";
+            fi
+
+            echo "---"
+            echo ""
+            echo "发布自源码仓库 [shaklow/syncclipboard-xposed](https://github.com/shaklow/syncclipboard-xposed) 的 GitHub Actions 自动构建。"
+            echo ""
+            echo "### APK 说明"
+            echo "- \`arm64-v8a\` — 64 位 ARM（主流 64 位设备）"
+            echo "- \`armeabi-v7a\` — 32 位 ARM（旧设备）"
+            echo "- \`x86_64\` — 模拟器 / x86 设备"
+            echo "- \`universal\` — 包含全部架构（体积最大，兼容性最好）"
+          } > /tmp/notes.md
+
+          echo "===生成的 changelog==="
+          cat /tmp/notes.md
+
       # ── 发布到 LSPosed 官方仓库 ────────────────────────────────
       - name: Create Release & Upload APKs
         env:
@@ -85,19 +165,6 @@ jobs:
         run: |
           set -e
           APK_DIR="shell/build/outputs/apk/release"
-
-          # 生成 release notes
-          cat > /tmp/notes.md <<EOF
-          ## v${VERSION_NAME}
-
-          发布自源码仓库 [shaklow/syncclipboard-xposed](https://github.com/shaklow/syncclipboard-xposed) 的 GitHub Actions 自动构建。
-
-          ### APK 说明
-          - \`arm64-v8a\` — 64 位 ARM（主流 64 位设备）
-          - \`armeabi-v7a\` — 32 位 ARM（旧设备）
-          - \`x86_64\` — 模拟器 / x86 设备
-          - \`universal\` — 包含全部架构（体积最大，兼容性最好）
-          EOF
 
           # 若开启 force 且 tag 已存在，先删除旧 release
           if [ "${{ inputs.force }}" = "true" ]; then
