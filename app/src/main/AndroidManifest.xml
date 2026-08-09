@@ -27,6 +27,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 长按快捷设置磁贴时由系统启动，进入应用主界面 -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <activity
@@ -72,6 +77,17 @@
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
+
+        <!-- 通知验证码自动上传：监听所有应用通知，需用户在系统设置授予"通知访问权限" -->
+        <service
+            android:name=".receiver.NotificationListener"
+            android:exported="false"
+            android:label="@string/setting_notification_upload"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- 快捷设置磁贴：切换自动同步总开关 -->
         <service

@@ -123,8 +123,10 @@
     <string name="setting_enable_logging_summary">输出详细日志到 logcat（关闭后仍显示警告/错误）</string>
     <string name="setting_auto_save">自动保存文件</string>
     <string name="setting_auto_save_summary">自动将同步的图片保存到相册，文件保存到下载目录</string>
-    <string name="setting_sms_upload">自动上传验证码</string>
+    <string name="setting_sms_upload">自动上传短信验证码</string>
     <string name="setting_sms_upload_summary">收到含验证码的短信时，自动提取并上传到剪贴板服务器</string>
+    <string name="setting_notification_upload">自动上传通知验证码</string>
+    <string name="setting_notification_upload_summary">监听所有应用通知，自动提取验证码并上传（需授予通知访问权限）</string>
     <string name="setting_language">语言</string>
     <string name="setting_language_auto">跟随系统</string>
     <string name="setting_language_zh">中文</string>

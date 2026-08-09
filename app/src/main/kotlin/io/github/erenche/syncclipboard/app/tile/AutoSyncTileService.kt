@@ -20,6 +20,10 @@ import kotlinx.serialization.json.Json
  * - 打开→关闭：后台上传/下载一并关闭
  *
  * 配置变更通过 bridge 推送到 SystemUI 进程的 SyncEngine。
+ *
+ * 交互：
+ * - 单击：切换自动同步开关
+ * - 长按：由系统启动声明了 QS_TILE_PREFERENCES 的 MainActivity（见 AndroidManifest）
  */
 @RequiresApi(Build.VERSION_CODES.N)
 class AutoSyncTileService : TileService() {
