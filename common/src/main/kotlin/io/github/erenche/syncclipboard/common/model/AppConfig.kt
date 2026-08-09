@@ -46,7 +46,10 @@ data class AppConfig(
     /** 自动同步时是否将图片/文件自动保存到相册/下载目录 */
     val enableAutoSave: Boolean = false,
     /** 自动上传短信验证码：收到含验证码的短信时自动提取并上传到服务器 */
-    val enableSmsUpload: Boolean = false
+    val enableSmsUpload: Boolean = false,
+    /** 自动上传通知验证码：监听所有应用通知，提取验证码后上传到服务器。
+     *  需要用户在系统设置中授予"通知访问权限"。独立于 [enableSmsUpload]。 */
+    val enableNotificationUpload: Boolean = false
 )
 
 /**
