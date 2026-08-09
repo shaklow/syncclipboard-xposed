@@ -12,7 +12,10 @@ An LSposed/Xposed module that syncs clipboard content between devices via [SyncC
 - **Automatic download** — polls or receives push notifications for remote clipboard changes
 - **Clipboard history** — browse, search, and delete synced history records
 - **SMS verification code** — auto-extracts and uploads verification codes from incoming SMS (optional)
+- **Notification verification code** — listens to all app notifications to auto-extract codes (IM/email/banking, optional, requires notification access)
+- **Quick settings tile** — one-tap toggle for auto-sync, long-press to open the app
 - **Multiple backends** — SyncClipboard HTTP server (with SignalR push), WebDAV, S3-compatible
+- **Backoff retry** — retries at 30s/60s/2min/5min intervals when the server is unreachable, stops after 4 consecutive failures to save battery
 
 ## Requirements
 

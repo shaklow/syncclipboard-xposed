@@ -1,0 +1,1 @@
+一个 LSPosed 模块，通过 SyncClipboard Server / WebDAV / S3 在多设备间静默同步剪贴板，支持短信与应用通知验证码自动上传。
