@@ -18,8 +18,10 @@ extra["minSdkVersion"] = 29
 // APK auto-export tasks
 val cleanApks: TaskProvider<Task> = tasks.register("cleanAllApks") {
     group = "build"
+    // 配置阶段捕获 Provider，避免执行阶段访问 project（兼容 configuration cache）
+    val outputDirProvider = project.layout.buildDirectory.dir("all-apks")
     doFirst {
-        val outputDir = project.layout.buildDirectory.dir("all-apks").get().asFile
+        val outputDir = outputDirProvider.get().asFile
         if (outputDir.exists()) {
             outputDir.deleteRecursively()
             println("--- [Clean] Cleaned old APK export directory ---")
