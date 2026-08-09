@@ -1,12 +1,10 @@
 package io.github.erenche.syncclipboard.app.tile
 
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
-import io.github.erenche.syncclipboard.app.activity.MainActivity
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
@@ -25,7 +23,7 @@ import kotlinx.serialization.json.Json
  *
  * 交互：
  * - 单击：切换自动同步开关
- * - 长按：启动应用主界面（[MainActivity]）
+ * - 长按：由系统启动声明了 QS_TILE_PREFERENCES 的 MainActivity（见 AndroidManifest）
  */
 @RequiresApi(Build.VERSION_CODES.N)
 class AutoSyncTileService : TileService() {
@@ -42,19 +40,6 @@ class AutoSyncTileService : TileService() {
     override fun onClick() {
         super.onClick()
         toggleAutoSync()
-    }
-
-    override fun onTileLongClick() {
-        super.onTileLongClick()
-        // 长按磁贴：启动应用主界面
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        try {
-            startActivityAndCollapse(intent)
-        } catch (e: Exception) {
-            Logger.warn(TAG, "Failed to launch MainActivity: ${e.message}")
-        }
     }
 
     /** 刷新磁贴状态以反映当前配置 */
