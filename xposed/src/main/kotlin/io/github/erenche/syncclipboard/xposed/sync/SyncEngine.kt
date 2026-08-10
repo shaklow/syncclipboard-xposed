@@ -69,6 +69,13 @@ class SyncEngine private constructor() {
     @Volatile
     private var lastRemoteHash: String? = null
 
+    /** 最近一次从服务器拉取（或上传）的 ProfileDto — 供 app 端通过 IPC 查询 */
+    @Volatile
+    private var lastRemoteProfile: ProfileDto? = null
+    /** 最近一次下载到本地的文件路径 — 供 app 端预览 */
+    @Volatile
+    private var lastRemoteFilePath: String? = null
+
     @Volatile
     private var isRunning = false
 
@@ -756,6 +763,7 @@ class SyncEngine private constructor() {
                 return true
             }
             lastRemoteHash = hash
+            lastRemoteProfile = profile
 
             isConnected = true
             lastSyncTime = System.currentTimeMillis()
@@ -801,6 +809,16 @@ class SyncEngine private constructor() {
             // 设置 lastRemoteHash，防止轮询循环立即下载刚上传的内容
             // 使用 uploadContent（已将 content:// 转为本地路径）保证文件 hash 可读
             lastRemoteHash = HashUtils.computeContentHash(uploadContent)
+            // 更新缓存，使 app 端能立即显示刚上传的内容
+            lastRemoteProfile = ProfileDto(
+                type = uploadContent.type,
+                hash = lastRemoteHash,
+                text = uploadContent.text,
+                hasData = uploadContent.hasData,
+                dataName = uploadContent.fileName,
+                size = uploadContent.fileSize
+            )
+            lastRemoteFilePath = uploadContent.fileUri?.takeIf { it.startsWith("/") }
             Logger.info(TAG, "Content uploaded successfully")
             return true
         } catch (e: Exception) {
@@ -888,6 +906,7 @@ class SyncEngine private constructor() {
                 timestamp = System.currentTimeMillis()
             )
             historyService?.addRemoteContent(historyContent, downloadedFilePath)
+            lastRemoteFilePath = downloadedFilePath
             notifyContentChanged()
 
             lastSyncTime = System.currentTimeMillis()
@@ -1069,6 +1088,31 @@ class SyncEngine private constructor() {
                     putBoolean("running", isRunning)
                     putBoolean("pollingActive", isPollingActive)
                     putLong("lastSyncTime", lastSyncTime)
+                })
+            }
+
+            onQuery(BridgeKeys.GET_CURRENT_CLIPBOARD) {
+                // 优先返回缓存（快速路径，无网络开销）
+                var profile = lastRemoteProfile
+                // 缓存为空时（SystemUI 重启 / 轮询未触发 / 首次查询）主动从服务器拉取一次
+                // 仅获取 profile，不触发 downloadAndApplyContent，避免 IPC 耗时过长
+                if (profile == null) {
+                    profile = try {
+                        apiClient?.getClipboard()?.also { p ->
+                            lastRemoteProfile = p
+                            Logger.info(TAG, "GET_CURRENT_CLIPBOARD: fetched on demand, hash=${p.hash}")
+                        }
+                    } catch (e: Exception) {
+                        Logger.warn(TAG, "GET_CURRENT_CLIPBOARD: on-demand fetch failed", e)
+                        null
+                    }
+                }
+                val profileJson = profile?.let {
+                    Json.encodeToString(ProfileDto.serializer(), it)
+                }
+                reply(Bundle().apply {
+                    if (profileJson != null) putString("profile", profileJson)
+                    if (lastRemoteFilePath != null) putString("filePath", lastRemoteFilePath)
                 })
             }
 

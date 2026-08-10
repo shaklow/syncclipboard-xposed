@@ -11,17 +11,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.SyncClipboardApp
-import io.github.erenche.syncclipboard.app.net.ServerApi
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
-import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.ProfileDto
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import java.io.File
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -112,30 +109,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 拉取服务器最新内容并下载文件 */
+    /** 通过 IPC 从 SyncEngine 获取服务器最新内容（支持所有服务器类型） */
     fun refreshRemoteContent() {
         _isLoadingRemote.value = true
         viewModelScope.launch {
             try {
-                val config = Prefs.loadConfig(app)
-                val server = config.servers.getOrNull(config.activeServerIndex)
-                if (server == null) {
-                    _toast.value = "未配置服务器"
-                    return@launch
+                val bundle = SyncClipboardBridge.with(app)
+                    .to("com.android.systemui")
+                    .key(BridgeKeys.GET_CURRENT_CLIPBOARD)
+                    .await(timeout = 15000)
+                val profileJson = bundle.getString("profile")
+                val profile = profileJson?.let {
+                    Json.decodeFromString(ProfileDto.serializer(), it)
                 }
-                val api = ServerApi(server)
-                val profile = withContext(Dispatchers.IO) { api.getClipboard() }
                 _remoteProfile.value = profile
 
-                if (profile != null && profile.hasData && !profile.dataName.isNullOrBlank()) {
-                    val destFile = File(app.cacheDir, "preview_${profile.dataName}")
-                    val downloaded = withContext(Dispatchers.IO) {
-                        api.downloadFile(profile.dataName!!, destFile)
-                    }
-                    _downloadedFile.value = downloaded
-                } else {
-                    _downloadedFile.value = null
-                }
+                val filePath = bundle.getString("filePath")
+                _downloadedFile.value = filePath?.let { File(it) }?.takeIf { it.exists() }
             } catch (e: Exception) {
                 _toast.value = "加载失败: ${e.message}"
             } finally {
