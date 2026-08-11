@@ -119,9 +119,9 @@
     <string name="setting_auto_download_max_size">Auto-download Max Size</string>
     <string name="setting_auto_download_max_size_summary">Maximum file size for auto-download (MB)</string>
     <string name="setting_log_level">Log Level</string>
-    <string name="setting_log_level_summary">Minimum level output to logcat</string>
+    <string name="setting_log_level_summary">Minimum level to output and record</string>
     <string name="setting_enable_logging">Enable Logging</string>
-    <string name="setting_enable_logging_summary">Output detailed logs to logcat (Warn/Error always shown when off)</string>
+    <string name="setting_enable_logging_summary">Output logs to logcat and in-app log viewer (no logs when off)</string>
     <string name="setting_log_buffer_size">Log Buffer Size</string>
     <string name="setting_log_buffer_size_summary">Maximum log lines kept in memory (%1$d lines)</string>
     <string name="setting_auto_save">Auto Save Files</string>

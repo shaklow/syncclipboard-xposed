@@ -119,9 +119,9 @@
     <string name="setting_auto_download_max_size">自动下载最大大小</string>
     <string name="setting_auto_download_max_size_summary">自动下载的最大文件大小（MB）</string>
     <string name="setting_log_level">日志等级</string>
-    <string name="setting_log_level_summary">输出到 logcat 的最低日志等级</string>
+    <string name="setting_log_level_summary">输出和记录的最低日志等级</string>
     <string name="setting_enable_logging">启用日志</string>
-    <string name="setting_enable_logging_summary">输出详细日志到 logcat（关闭后仍显示警告/错误）</string>
+    <string name="setting_enable_logging_summary">输出日志到 logcat 和应用内日志（关闭后不输出任何日志）</string>
     <string name="setting_log_buffer_size">日志缓冲区大小</string>
     <string name="setting_log_buffer_size_summary">内存中保留的最大日志行数（%1$d 行）</string>
     <string name="setting_auto_save">自动保存文件</string>

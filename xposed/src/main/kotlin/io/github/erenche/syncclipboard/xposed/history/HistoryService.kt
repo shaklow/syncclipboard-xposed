@@ -678,7 +678,6 @@ class HistoryService(context: Context) {
             val name = fileName ?: "file_$hash"
             val dest = File(historyDir, "${hash}_${name}")
             src.copyTo(dest, overwrite = true)
-            dest.setReadable(true, false)
             Logger.debug(TAG, "Copied to history dir: $sourceUri -> ${dest.absolutePath}")
             dest.absolutePath
         } catch (e: Exception) {

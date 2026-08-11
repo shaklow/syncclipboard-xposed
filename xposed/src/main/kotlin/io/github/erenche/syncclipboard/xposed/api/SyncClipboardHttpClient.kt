@@ -13,8 +13,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
@@ -62,9 +60,6 @@ class SyncClipboardHttpClient(
                 ignoreUnknownKeys = true
                 prettyPrint = false
             })
-        }
-        install(Logging) {
-            level = LogLevel.INFO
         }
     }
 

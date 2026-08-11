@@ -928,9 +928,7 @@ class SyncEngine private constructor() {
                 val name = profile.dataName!!
                 val destPath = "${context.filesDir}/downloads/$name"
                 client.downloadFile(name, destPath)
-                // 设置文件可读，使其他应用能通过 file:// URI 访问
                 val destFile = java.io.File(destPath)
-                destFile.setReadable(true, false)
                 downloadedFileUri = android.net.Uri.fromFile(destFile)
                 downloadedFilePath = destPath
                 Logger.info(TAG, "File downloaded: $name -> $destPath")

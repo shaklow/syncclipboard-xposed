@@ -46,6 +46,7 @@ import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
 import io.github.erenche.syncclipboard.app.net.ServerApi
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
+import io.github.erenche.syncclipboard.bridge.BridgeSecurity
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.ClipboardContentType
@@ -253,6 +254,7 @@ fun HistoryScreen() {
         // 剪贴板变化：刷新列表
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
+                if (!BridgeSecurity.isTrustedSender(ctx)) return
                 if (intent.action == BridgeKeys.EVENT_CLIPBOARD_CHANGED) {
                     scope.launch { loadHistoryPage(currentPage) }
                 }
@@ -271,6 +273,7 @@ fun HistoryScreen() {
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
+                if (!BridgeSecurity.isTrustedSender(ctx)) return
                 scope.launch { loadHistoryPage(currentPage) }
                 val success = intent.getBooleanExtra("success", false)
                 if (success) {

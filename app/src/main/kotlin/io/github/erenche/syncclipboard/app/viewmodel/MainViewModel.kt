@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.SyncClipboardApp
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
+import io.github.erenche.syncclipboard.bridge.BridgeSecurity
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.model.ProfileDto
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +52,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val resultReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent ?: return
+            if (context != null && !BridgeSecurity.isTrustedSender(context)) return
             when (intent.action) {
                 BridgeKeys.EVENT_ACTION_RESULT -> {
                     val action = intent.getStringExtra("action") ?: return

@@ -41,6 +41,13 @@ object SyncClipboardBridge {
     private const val EXTRA_PAYLOAD = "payload"
     private const val EXTRA_CALLBACK = "callback"
 
+    /**
+     * 自定义 signature 权限：仅与本 App 同签名的进程可发送广播到此 receiver。
+     * App 自身声明该权限并 uses-permission（签名一致自动授予），SystemUI 进程
+     * 注册 receiver 时通过该 permission 过滤发送方。第三方 App 签名不同无法获得。
+     */
+    const val PERMISSION_BRIDGE = "io.github.erenche.syncclipboard.permission.BRIDGE"
+
     /** 处理器存储：支持挂起函数的 Lambda 容器 */
     private val handlers = ConcurrentHashMap<String, suspend (Bundle) -> Bundle?>()
 
@@ -51,6 +58,13 @@ object SyncClipboardBridge {
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != ACTION_IPC) return
+
+            // D 方案：调用方 UID 校验 — 仅允许本 App 或 SystemUI 进程调用
+            if (!BridgeSecurity.isTrustedSender(context)) {
+                Logger.warn(TAG, "Reject IPC from uid=${android.os.Binder.getCallingUid()}")
+                return
+            }
+
             val key = intent.getStringExtra(EXTRA_KEY) ?: return
             val handler = handlers[key] ?: return
 
@@ -87,10 +101,13 @@ object SyncClipboardBridge {
     fun routing(context: Context, block: BridgeRoutingScope.() -> Unit) {
         if (!isInitialized) synchronized(this) {
             if (!isInitialized) {
+                // C 方案：要求发送方持有 signature 权限，第三方 App 签名不同无法获得
                 ContextCompat.registerReceiver(
                     context.applicationContext,
                     receiver,
                     IntentFilter(ACTION_IPC),
+                    PERMISSION_BRIDGE,
+                    null,
                     ContextCompat.RECEIVER_EXPORTED
                 )
                 isInitialized = true

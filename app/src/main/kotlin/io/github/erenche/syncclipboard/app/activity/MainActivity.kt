@@ -32,6 +32,7 @@ import io.github.erenche.syncclipboard.app.SyncClipboardApp
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
 import io.github.erenche.syncclipboard.app.viewmodel.MainViewModel
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
+import io.github.erenche.syncclipboard.bridge.BridgeSecurity
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.AppConfig
@@ -142,6 +143,7 @@ fun MainScreen(viewModel: MainViewModel) {
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                if (!BridgeSecurity.isTrustedSender(context)) return
                 viewModel.refreshRemoteContentCache()
             }
         }
