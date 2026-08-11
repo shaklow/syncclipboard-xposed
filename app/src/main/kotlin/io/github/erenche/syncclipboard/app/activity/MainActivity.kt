@@ -138,11 +138,11 @@ fun MainScreen(viewModel: MainViewModel) {
         viewModel.refreshRemoteContent()
     }
 
-    // 监听内容变化广播，自动刷新服务器最新内容
+    // 监听内容变化广播，只读取缓存刷新 UI（不触发服务端拉取，避免循环）
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                viewModel.refreshRemoteContent()
+                viewModel.refreshRemoteContentCache()
             }
         }
         ContextCompat.registerReceiver(

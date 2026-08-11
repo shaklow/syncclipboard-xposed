@@ -38,6 +38,10 @@ class HistoryService(context: Context) {
     private val historyDir = File(context.filesDir, "history_files").apply { if (!exists()) mkdirs() }
     private val lock = Any()
 
+    /** 批量模式标记：开启后 saveToDisk 只设脏标记，由 endBatch 统一落盘 */
+    @Volatile private var batchMode = false
+    private var dirty = false
+
     private val _items = MutableStateFlow<List<HistoryItem>>(emptyList())
     val items: Flow<List<HistoryItem>> = _items.asStateFlow()
 
@@ -56,6 +60,39 @@ class HistoryService(context: Context) {
             .toList()
         Logger.info(TAG, "getPaged: limit=$limit, offset=$offset, total=${_items.value.size}, active=${_items.value.count { !it.isDeleted }}, returned=${result.size}")
         return result
+    }
+
+    /**
+     * 分页查询（支持搜索文本过滤），置顶优先，按时间倒序，排除软删除。
+     * 用于 UI 分页加载，避免全量序列化。
+     */
+    fun getPaged(offset: Int, limit: Int, searchText: String?): List<HistoryItem> {
+        val q = searchText?.trim()
+        val result = _items.value.asSequence()
+            .filter { !it.isDeleted }
+            .filter { item ->
+                if (q.isNullOrEmpty()) true
+                else item.text.contains(q, ignoreCase = true) ||
+                    item.dataName?.contains(q, ignoreCase = true) == true
+            }
+            .sortedWith(compareByDescending<HistoryItem> { if (it.pinned) 1 else 0 }
+                .thenByDescending { it.timestamp })
+            .drop(offset)
+            .take(limit)
+            .toList()
+        return result
+    }
+
+    /** 符合搜索条件的活跃记录总数（用于 UI 计算总页数） */
+    fun count(searchText: String?): Int {
+        val q = searchText?.trim()
+        return _items.value.count { item ->
+            !item.isDeleted && (
+                if (q.isNullOrEmpty()) true
+                else item.text.contains(q, ignoreCase = true) ||
+                    item.dataName?.contains(q, ignoreCase = true) == true
+            )
+        }
     }
 
     /** 获取全部记录（置顶优先，按时间倒序），排除软删除 */
@@ -678,7 +715,41 @@ class HistoryService(context: Context) {
         }
     }
 
+    /**
+     * 开启批量模式：后续所有 saveToDisk 调用只标记脏，不实际写盘。
+     * 用于 syncHistory 期间避免 20-50 次全量重写。
+     */
+    fun beginBatch() {
+        synchronized(lock) {
+            batchMode = true
+            dirty = false
+        }
+    }
+
+    /**
+     * 结束批量模式：若有脏标记则统一落盘一次。
+     */
+    fun endBatch() {
+        synchronized(lock) {
+            batchMode = false
+            if (dirty) {
+                doSaveToDisk()
+                dirty = false
+            }
+        }
+    }
+
     private fun saveToDisk() {
+        synchronized(lock) {
+            if (batchMode) {
+                dirty = true
+                return
+            }
+        }
+        doSaveToDisk()
+    }
+
+    private fun doSaveToDisk() {
         try {
             historyFile.writeText(
                 json.encodeToString(ListSerializer(HistoryItem.serializer()), _items.value)

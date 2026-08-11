@@ -41,6 +41,8 @@ data class AppConfig(
     val enableLogging: Boolean = true,
     /** 日志等级 */
     val logLevel: LogLevel = LogLevel.Info,
+    /** 内存日志缓冲区最大行数 */
+    val logBufferSize: Int = 2000,
     /** 历史记录最大保留条数 */
     val maxHistoryItems: Int = 1000,
     /** 自动同步时是否将图片/文件自动保存到相册/下载目录 */

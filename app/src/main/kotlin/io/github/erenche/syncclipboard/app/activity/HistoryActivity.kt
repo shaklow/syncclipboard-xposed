@@ -52,6 +52,10 @@ import io.github.erenche.syncclipboard.common.model.ClipboardContentType
 import io.github.erenche.syncclipboard.common.model.HistoryItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
@@ -90,6 +94,7 @@ class HistoryActivity : BaseActivity() {
  * 剪贴板历史页面 — Miuix 全组件风格。
  * 通过 bridge 从 SystemUI 进程的 SyncEngine 加载数据。
  */
+@OptIn(FlowPreview::class)
 @Composable
 fun HistoryScreen() {
     val context = LocalContext.current
@@ -97,6 +102,7 @@ fun HistoryScreen() {
     val scope = rememberCoroutineScope()
 
     var items by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
+    var totalCount by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -106,24 +112,10 @@ fun HistoryScreen() {
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectionMode = selectedIds.isNotEmpty()
 
-    // 本地过滤（服务端不支持搜索）
-    val filteredItems = remember(items, searchQuery) {
-        if (searchQuery.isBlank()) items
-        else items.filter {
-            it.text.contains(searchQuery, ignoreCase = true) ||
-                (it.dataName?.contains(searchQuery, ignoreCase = true) == true)
-        }
+    // 服务端分页：totalPages 基于服务端返回的 totalCount
+    val totalPages = remember(totalCount, pageSize) {
+        if (totalCount == 0) 1 else (totalCount + pageSize - 1) / pageSize
     }
-    val totalPages = remember(filteredItems.size, pageSize) {
-        if (filteredItems.isEmpty()) 1 else (filteredItems.size + pageSize - 1) / pageSize
-    }
-    val pagedItems = remember(filteredItems, currentPage, pageSize) {
-        val start = (currentPage - 1) * pageSize
-        if (start >= filteredItems.size) emptyList()
-        else filteredItems.subList(start, minOf(start + pageSize, filteredItems.size))
-    }
-    // 搜索条件或每页条数变化时重置到第1页
-    LaunchedEffect(searchQuery, pageSize) { currentPage = 1 }
 
     // 多选模式下按返回键先退出多选，而非结束页面
     BackHandler(enabled = selectionMode) { selectedIds = emptySet() }
@@ -132,14 +124,21 @@ fun HistoryScreen() {
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
     }
 
-    // ─── 数据加载 ────────────────────────────────────────────────
+    // ─── 数据加载（服务端分页）────────────────────────────────────
 
-    suspend fun loadHistory() {
+    suspend fun loadHistoryPage(page: Int = currentPage) {
         try {
+            val offset = (page - 1) * pageSize
+            val payload = Bundle().apply {
+                putInt("offset", offset)
+                putInt("limit", pageSize)
+                if (searchQuery.isNotBlank()) putString("searchText", searchQuery)
+            }
             val bundle = SyncClipboardBridge.with(context)
                 .to("com.android.systemui")
-                .key(BridgeKeys.GET_HISTORY)
-                .await(timeout = 15000)
+                .key(BridgeKeys.GET_HISTORY_PAGED)
+                .payload(payload)
+                .await(timeout = 10000)
             val json = bundle.getString("items")
             items = if (!json.isNullOrBlank()) {
                 Json { ignoreUnknownKeys = true }
@@ -147,6 +146,7 @@ fun HistoryScreen() {
             } else {
                 emptyList()
             }
+            totalCount = bundle.getInt("totalCount", 0)
         } catch (_: Exception) {
         } finally {
             loading = false
@@ -161,23 +161,19 @@ fun HistoryScreen() {
                 val result = SyncClipboardBridge.with(context)
                     .to("com.android.systemui")
                     .key(BridgeKeys.FORCE_SYNC_HISTORY)
-                    .await(timeout = 60000)
-                loadHistory()
-                val success = result.getBoolean("success")
-                if (!success) {
+                    .await(timeout = 10000)
+                val started = result.getBoolean("started", false)
+                if (!started) {
                     val error = result.getString("error") ?: "Sync failed"
                     Toast.makeText(context, "同步失败: $error", Toast.LENGTH_LONG).show()
+                    refreshing = false
                 } else {
-                    val fetched = result.getInt("fetched", -1)
-                    val localCount = result.getInt("count", -1)
-                    Toast.makeText(
-                        context,
-                        "同步完成: 服务器 $fetched 条, 本地 $localCount 条",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    // 同步在后台进行，等待 EVENT_HISTORY_SYNC_COMPLETED 广播
+                    Toast.makeText(context, "正在从服务器同步...", Toast.LENGTH_SHORT).show()
+                    // refreshing 保持 true，由广播接收器收到完成后置 false
                 }
             } catch (e: Exception) {
-                loadHistory()
+                refreshing = false
                 Toast.makeText(context, "同步异常: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -218,13 +214,35 @@ fun HistoryScreen() {
 
     // ─── 生命周期 ────────────────────────────────────────────────
 
-    LaunchedEffect(Unit) { loadHistory() }
+    // 首次进入加载第 1 页
+    LaunchedEffect(Unit) { loadHistoryPage(1) }
+
+    // 翻页 / 切换每页数量 → 重新加载对应页
+    LaunchedEffect(currentPage, pageSize) {
+        if (!loading || items.isNotEmpty()) loadHistoryPage(currentPage)
+    }
+
+    // 搜索框防抖（500ms）：重置到第 1 页并触发服务端查询
+    // drop(1) 跳过初始空值，避免与首次加载重复
+    LaunchedEffect(Unit) {
+        snapshotFlow { searchQuery }
+            .drop(1)
+            .debounce(500)
+            .distinctUntilChanged()
+            .collect {
+                if (currentPage != 1) {
+                    currentPage = 1
+                } else {
+                    loadHistoryPage(1)
+                }
+            }
+    }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                scope.launch { loadHistory() }
+                scope.launch { loadHistoryPage(currentPage) }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -232,14 +250,46 @@ fun HistoryScreen() {
     }
 
     DisposableEffect(Unit) {
+        // 剪贴板变化：刷新列表
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
-                scope.launch { loadHistory() }
+                if (intent.action == BridgeKeys.EVENT_CLIPBOARD_CHANGED) {
+                    scope.launch { loadHistoryPage(currentPage) }
+                }
+            }
+        }
+        val filter = IntentFilter(BridgeKeys.EVENT_CLIPBOARD_CHANGED)
+        ContextCompat.registerReceiver(
+            context, receiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
+    // 历史同步完成：刷新列表并提示结果
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                scope.launch { loadHistoryPage(currentPage) }
+                val success = intent.getBooleanExtra("success", false)
+                if (success) {
+                    val fetched = intent.getIntExtra("fetched", -1)
+                    val localCount = intent.getIntExtra("count", -1)
+                    Toast.makeText(
+                        context,
+                        "同步完成: 服务器 $fetched 条, 本地 $localCount 条",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    val error = intent.getStringExtra("error") ?: "未知错误"
+                    Toast.makeText(context, "同步失败: $error", Toast.LENGTH_LONG).show()
+                }
             }
         }
         ContextCompat.registerReceiver(
             context, receiver,
-            IntentFilter(BridgeKeys.EVENT_CLIPBOARD_CHANGED),
+            IntentFilter(BridgeKeys.EVENT_HISTORY_SYNC_COMPLETED),
             ContextCompat.RECEIVER_EXPORTED
         )
         onDispose { context.unregisterReceiver(receiver) }
@@ -342,7 +392,7 @@ fun HistoryScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         SmallTitle(
-                            text = stringResource(R.string.history_total_count, filteredItems.size),
+                            text = stringResource(R.string.history_total_count, totalCount),
                             insideMargin = PaddingValues(0.dp),
                         )
                         Row(
@@ -357,7 +407,12 @@ fun HistoryScreen() {
                             listOf(50, 100).forEach { size ->
                                 TextButton(
                                     text = size.toString(),
-                                    onClick = { pageSize = size },
+                                    onClick = {
+                                        if (pageSize != size) {
+                                            pageSize = size
+                                            currentPage = 1
+                                        }
+                                    },
                                     colors = if (pageSize == size)
                                         ButtonDefaults.textButtonColorsPrimary()
                                     else
@@ -371,7 +426,7 @@ fun HistoryScreen() {
                     }
                 }
 
-                if (filteredItems.isEmpty()) {
+                if (items.isEmpty()) {
                     item("no_results") {
                         Card(
                             modifier = Modifier
@@ -392,7 +447,7 @@ fun HistoryScreen() {
                         }
                     }
 
-                    items(pagedItems, key = { it.id }) { historyItem ->
+                    items(items, key = { it.id }) { historyItem ->
                         SwipeableHistoryCard(
                             item = historyItem,
                             context = context,
@@ -502,18 +557,18 @@ private fun SwipeableHistoryCard(
         enableDismissFromStartToEnd = false,
         enableDismissFromEndToStart = !selectionMode,
         backgroundContent = {
-            // 左滑露出的红色删除背景 + 图标
+            // 左滑露出的删除背景 + 图标（主题感知 error 色）
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(cardShape)
-                    .background(Color(0xFFE84C3D)),
+                    .background(MiuixTheme.colorScheme.error),
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 Icon(
                     imageVector = MiuixIcons.Delete,
                     contentDescription = stringResource(R.string.action_delete),
-                    tint = Color.White,
+                    tint = MiuixTheme.colorScheme.onError,
                     modifier = Modifier
                         .padding(end = 24.dp)
                         .size(24.dp),
@@ -604,8 +659,7 @@ private fun HistoryItemRow(
         ClipboardContentType.Group -> stringResource(R.string.type_group)
     }
     val typeLabelColor = when (item.type) {
-        ClipboardContentType.Image -> MiuixTheme.colorScheme.primary
-        ClipboardContentType.File -> Color(0xFFFF9800)
+        ClipboardContentType.Image, ClipboardContentType.File -> MiuixTheme.colorScheme.primary
         else -> MiuixTheme.colorScheme.onBackgroundVariant
     }
     val contentText = when (item.type) {

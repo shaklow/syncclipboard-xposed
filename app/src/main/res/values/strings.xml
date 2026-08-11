@@ -119,8 +119,11 @@
     <string name="setting_auto_download_max_size">Auto-download Max Size</string>
     <string name="setting_auto_download_max_size_summary">Maximum file size for auto-download (MB)</string>
     <string name="setting_log_level">Log Level</string>
+    <string name="setting_log_level_summary">Minimum level output to logcat</string>
     <string name="setting_enable_logging">Enable Logging</string>
     <string name="setting_enable_logging_summary">Output detailed logs to logcat (Warn/Error always shown when off)</string>
+    <string name="setting_log_buffer_size">Log Buffer Size</string>
+    <string name="setting_log_buffer_size_summary">Maximum log lines kept in memory (%1$d lines)</string>
     <string name="setting_auto_save">Auto Save Files</string>
     <string name="setting_auto_save_summary">Automatically save synced images to gallery and files to downloads</string>
     <string name="setting_sms_upload">Upload SMS Codes</string>
@@ -148,6 +151,15 @@
     <string name="item_history_summary">View synced clipboard history</string>
     <string name="item_log">Logs</string>
     <string name="item_log_summary">View sync engine logs</string>
+    <string name="log_level_debug">Debug</string>
+    <string name="log_level_info">Info</string>
+    <string name="log_level_warn">Warn</string>
+    <string name="log_level_error">Error</string>
+    <string name="log_search_hint">Search logs…</string>
+    <string name="log_export">Export</string>
+    <string name="log_export_success">Exported to Downloads: %1$s</string>
+    <string name="log_export_failed">Export failed: %1$s</string>
+    <string name="log_empty">No logs</string>
     <string name="item_more">More</string>
     <string name="item_more_summary">Settings, history, logs, about</string>
     <string name="item_about_app">About</string>

@@ -421,7 +421,7 @@ fun ServerEditDialog(
                         onValueChange = { name = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = stringResource(R.string.server_name),
-                        useLabelAsPlaceholder = true,
+
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                     )
@@ -432,7 +432,7 @@ fun ServerEditDialog(
                         onValueChange = { url = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = stringResource(R.string.server_url),
-                        useLabelAsPlaceholder = true,
+
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     )
@@ -444,7 +444,7 @@ fun ServerEditDialog(
                         modifier = Modifier.fillMaxWidth(),
                         label = if (serverType == ServerType.s3) "Access Key ID"
                             else stringResource(R.string.server_username),
-                        useLabelAsPlaceholder = true,
+
                         singleLine = true,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
@@ -455,7 +455,7 @@ fun ServerEditDialog(
                         modifier = Modifier.fillMaxWidth(),
                         label = if (serverType == ServerType.s3) "Secret Access Key"
                             else stringResource(R.string.server_password),
-                        useLabelAsPlaceholder = true,
+
                         singleLine = true,
                         visualTransformation = if (showPassword) VisualTransformation.None
                         else PasswordVisualTransformation(),
@@ -485,7 +485,7 @@ fun ServerEditDialog(
                             onValueChange = { region = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = stringResource(R.string.server_region),
-                            useLabelAsPlaceholder = true,
+    
                             singleLine = true,
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -495,7 +495,7 @@ fun ServerEditDialog(
                             onValueChange = { bucketName = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = stringResource(R.string.server_bucket),
-                            useLabelAsPlaceholder = true,
+    
                             singleLine = true,
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -505,7 +505,7 @@ fun ServerEditDialog(
                             onValueChange = { objectPrefix = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = stringResource(R.string.server_prefix),
-                            useLabelAsPlaceholder = true,
+    
                             singleLine = true,
                         )
                         Spacer(modifier = Modifier.height(10.dp))

@@ -28,6 +28,7 @@ class SyncClipboardApp : Application() {
         val config = Prefs.loadConfig(this)
         Logger.enabled = config.enableLogging
         Logger.logLevel = config.logLevel
+        Logger.maxBufferSize = config.logBufferSize
         Logger.info(TAG, "SyncClipboardApp created")
 
         // SyncEngine 在 system_server 中运行（由 GeneralHooker 初始化）

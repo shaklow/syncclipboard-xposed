@@ -15,11 +15,12 @@ import java.util.concurrent.ConcurrentLinkedDeque
  *
  * 注意：info/debug 级别在 enabled=false 时不输出到 logcat，也不记入缓冲区。
  * 需要始终可见的关键运行信息请使用 warn() 或 error()。
+ *
+ * 缓冲区行数由 [maxBufferSize] 控制，可在设置页调整。
  */
 object Logger {
 
     private const val TAG = "SyncClipboard"
-    private const val MAX_BUFFER = 1000
 
     /** 日志总开关，false 时仅输出 Warn/Error（保证异常可见） */
     @Volatile
@@ -28,7 +29,11 @@ object Logger {
     @Volatile
     var logLevel: LogLevel = LogLevel.Info
 
-    private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    /** 内存日志缓冲区最大行数，超限后丢弃最旧条目 */
+    @Volatile
+    var maxBufferSize: Int = 2000
+
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
     private val buffer = ConcurrentLinkedDeque<String>()
 
     private fun timestamp(): String = dateFormat.format(Date())
@@ -43,7 +48,8 @@ object Logger {
             "$ts $level/[$tag] $message"
         }
         buffer.addLast(line)
-        while (buffer.size > MAX_BUFFER) buffer.pollFirst()
+        val limit = maxBufferSize
+        while (buffer.size > limit) buffer.pollFirst()
     }
 
     fun debug(tag: String, message: String) {
@@ -81,12 +87,6 @@ object Logger {
 
     /** 获取内存缓冲区中的所有日志（按时间顺序） */
     fun getLogs(): String = buffer.joinToString("\n")
-
-    /** 获取最近 N 条日志 */
-    fun getRecentLogs(count: Int): String {
-        val all = buffer.toList()
-        return all.takeLast(count).joinToString("\n")
-    }
 
     /** 清空日志缓冲区 */
     fun clear() {

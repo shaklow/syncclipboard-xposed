@@ -119,8 +119,11 @@
     <string name="setting_auto_download_max_size">自动下载最大大小</string>
     <string name="setting_auto_download_max_size_summary">自动下载的最大文件大小（MB）</string>
     <string name="setting_log_level">日志等级</string>
+    <string name="setting_log_level_summary">输出到 logcat 的最低日志等级</string>
     <string name="setting_enable_logging">启用日志</string>
     <string name="setting_enable_logging_summary">输出详细日志到 logcat（关闭后仍显示警告/错误）</string>
+    <string name="setting_log_buffer_size">日志缓冲区大小</string>
+    <string name="setting_log_buffer_size_summary">内存中保留的最大日志行数（%1$d 行）</string>
     <string name="setting_auto_save">自动保存文件</string>
     <string name="setting_auto_save_summary">自动将同步的图片保存到相册，文件保存到下载目录</string>
     <string name="setting_sms_upload">自动上传短信验证码</string>
@@ -148,6 +151,15 @@
     <string name="item_history_summary">查看已同步的剪贴板历史</string>
     <string name="item_log">日志</string>
     <string name="item_log_summary">查看同步引擎运行日志</string>
+    <string name="log_level_debug">调试</string>
+    <string name="log_level_info">信息</string>
+    <string name="log_level_warn">警告</string>
+    <string name="log_level_error">错误</string>
+    <string name="log_search_hint">搜索日志…</string>
+    <string name="log_export">导出</string>
+    <string name="log_export_success">已导出到下载目录：%1$s</string>
+    <string name="log_export_failed">导出失败：%1$s</string>
+    <string name="log_empty">暂无日志</string>
     <string name="item_more">其他</string>
     <string name="item_more_summary">设置、历史、日志、关于</string>
     <string name="item_about_app">关于</string>

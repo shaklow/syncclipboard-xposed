@@ -109,29 +109,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 通过 IPC 从 SyncEngine 获取服务器最新内容（支持所有服务器类型） */
+    /** 通过 IPC 从 SyncEngine 获取服务器最新内容（支持所有服务器类型）。
+     *  用户下拉刷新调用：fire-and-forget 触发服务端强制拉取，转圈由
+     *  EVENT_CLIPBOARD_CHANGED 广播（refreshRemoteContentCache）或超时停止。 */
     fun refreshRemoteContent() {
         _isLoadingRemote.value = true
+        val payload = android.os.Bundle().apply { putBoolean("forceFetch", true) }
+        SyncClipboardBridge.with(app)
+            .to("com.android.systemui")
+            .key(BridgeKeys.GET_CURRENT_CLIPBOARD)
+            .payload(payload)
+            .send()
+        // 超时保护：8 秒后强制停止转圈（防止广播丢失导致永远转圈）
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(8000)
+            if (_isLoadingRemote.value) {
+                _isLoadingRemote.value = false
+            }
+        }
+    }
+
+    /** 仅读取缓存更新 UI，不触发服务端拉取。
+     *  供 EVENT_CLIPBOARD_CHANGED 广播调用：fetch 已完成，读取最新缓存并停止转圈。 */
+    fun refreshRemoteContentCache() {
         viewModelScope.launch {
             try {
                 val bundle = SyncClipboardBridge.with(app)
                     .to("com.android.systemui")
                     .key(BridgeKeys.GET_CURRENT_CLIPBOARD)
-                    .await(timeout = 15000)
-                val profileJson = bundle.getString("profile")
-                val profile = profileJson?.let {
-                    Json.decodeFromString(ProfileDto.serializer(), it)
-                }
-                _remoteProfile.value = profile
-
-                val filePath = bundle.getString("filePath")
-                _downloadedFile.value = filePath?.let { File(it) }?.takeIf { it.exists() }
-            } catch (e: Exception) {
-                _toast.value = "加载失败: ${e.message}"
+                    .await(timeout = 5000)
+                applyRemoteBundle(bundle)
+            } catch (_: Exception) {
             } finally {
+                // fetch 完成，停止转圈
                 _isLoadingRemote.value = false
             }
         }
+    }
+
+    private fun applyRemoteBundle(bundle: android.os.Bundle) {
+        val profileJson = bundle.getString("profile")
+        val profile = profileJson?.let {
+            Json.decodeFromString(ProfileDto.serializer(), it)
+        }
+        _remoteProfile.value = profile
+
+        val filePath = bundle.getString("filePath")
+        _downloadedFile.value = filePath?.let { File(it) }?.takeIf { it.exists() }
     }
 
     fun triggerSync() {
