@@ -17,20 +17,27 @@ import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.put
+import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.call.body
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.net.URLEncoder
 
 /**
  * WebDAV 客户端 — 通过 HTTP 操作 WebDAV 存储。
  *
- * 端口自 TypeScript WebDAVClient.ts。
+ * 端口自 C# WebDavAdapter.cs / WebDavBase.cs。
+ * 与 SyncClipboard 服务端/桌面端使用的路径一致：
+ * - 剪贴板配置文件: SyncClipboard.json
+ * - 文件目录: file/
  */
 class WebDAVClient(
     private val baseUrl: String,
@@ -40,8 +47,8 @@ class WebDAVClient(
 
     companion object {
         private const val TAG = "WebDAVClient"
-        private const val CLIPBOARD_FILE = "clipboard.json"
-        private const val DATA_DIR = "data"
+        private const val CLIPBOARD_FILE = "SyncClipboard.json"
+        private const val DATA_DIR = "file"
     }
 
     private val client = HttpClient(OkHttp) {
@@ -65,10 +72,19 @@ class WebDAVClient(
 
     override suspend fun getClipboard(): ProfileDto? {
         return try {
-            val responseText = client.get("$baseUrl/$CLIPBOARD_FILE") {
+            val response = client.get("$baseUrl/$CLIPBOARD_FILE") {
                 header(HttpHeaders.Authorization, buildAuthHeader())
-            }.bodyAsText()
-
+            }
+            // 404 = 文件尚未创建（首次使用），返回 null
+            if (response.status.value == 404) {
+                Logger.info(TAG, "Clipboard file not found (404), returning null")
+                return null
+            }
+            if (!response.status.isSuccess()) {
+                Logger.warn(TAG, "getClipboard: server returned ${response.status.value}")
+                return null
+            }
+            val responseText = response.bodyAsText()
             Json.decodeFromString<ProfileDto>(responseText)
         } catch (e: Exception) {
             Logger.warn(TAG, "Failed to get clipboard from WebDAV", e)
@@ -92,7 +108,9 @@ class WebDAVClient(
         val destFile = File(destinationPath)
         destFile.parentFile?.mkdirs()
 
-        val bytes = client.get("$baseUrl/$DATA_DIR/$fileName") {
+        // URLEncoder 将空格编码为 +，WebDAV 路径需要 %20（与 C# Uri.EscapeDataString 一致）
+        val encodedName = URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
+        val bytes = client.get("$baseUrl/$DATA_DIR/$encodedName") {
             header(HttpHeaders.Authorization, buildAuthHeader())
         }.body<ByteArray>()
 
@@ -105,9 +123,32 @@ class WebDAVClient(
         val file = File(filePath)
         if (!file.exists()) throw IllegalStateException("File not found: $filePath")
 
-        client.put("$baseUrl/$DATA_DIR/$fileName") {
+        // 确保远程目录存在（MKCOL，已存在则忽略 405）
+        ensureDataDirectoryExists()
+
+        val encodedName = URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
+        client.put("$baseUrl/$DATA_DIR/$encodedName") {
             header(HttpHeaders.Authorization, buildAuthHeader())
             setBody(file.readBytes())
+        }
+    }
+
+    /**
+     * 创建远程文件目录（MKCOL）。
+     * 目录已存在时服务器返回 405，忽略此错误。
+     */
+    private suspend fun ensureDataDirectoryExists() {
+        try {
+            val response = client.request("$baseUrl/$DATA_DIR/") {
+                method = HttpMethod.parse("MKCOL")
+                header(HttpHeaders.Authorization, buildAuthHeader())
+            }
+            if (response.status.value == 201) {
+                Logger.info(TAG, "Data directory created: $DATA_DIR/")
+            }
+            // 405 = 目录已存在，正常情况
+        } catch (e: Exception) {
+            Logger.warn(TAG, "ensureDataDirectoryExists: ${e.message}")
         }
     }
 
@@ -130,9 +171,14 @@ class WebDAVClient(
     }
 
     override suspend fun testConnection() {
-        // Test by attempting to list directory
-        client.get(baseUrl) {
+        // 使用 PROPFIND + Depth: 1 测试连接，与服务端 WebDav.Test() 一致
+        val response = client.request(baseUrl) {
+            method = HttpMethod.parse("PROPFIND")
             header(HttpHeaders.Authorization, buildAuthHeader())
+            header("Depth", "1")
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("WebDAV test connection failed: ${response.status.value}")
         }
         Logger.info(TAG, "Connection test successful")
     }

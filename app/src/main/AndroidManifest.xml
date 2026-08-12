@@ -4,11 +4,19 @@
 
     <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
 
+    <!-- 自定义 signature 权限：保护 SystemUI 进程中的 Bridge receiver，
+         仅与本 App 同签名的进程可发送广播。App 与自身签名一致，自动获得授权；
+         第三方 App 签名不同，无法获得该权限，因此无法伪造 IPC 广播。 -->
+    <permission
+        android:name="io.github.erenche.syncclipboard.permission.BRIDGE"
+        android:protectionLevel="signature" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="io.github.erenche.syncclipboard.permission.BRIDGE" />
 
     <application
         android:name=".SyncClipboardApp"
@@ -16,6 +24,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:description="@string/app_description"
         android:theme="@style/Theme.DayNight">
 
@@ -45,6 +54,10 @@
         <activity
             android:name=".activity.HistoryActivity"
             android:label="@string/activity_history" />
+
+        <activity
+            android:name=".activity.TransferActivity"
+            android:label="@string/activity_transfer" />
 
         <activity
             android:name=".activity.MoreActivity"

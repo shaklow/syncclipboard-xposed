@@ -644,19 +644,30 @@ fun HistorySettingsCard() {
 // ─── 日志设置 ─────────────────────────────────────────────────
 @Composable
 fun LoggingSettingsCard(context: android.content.Context) {
-    var enableLogging by remember {
-        mutableStateOf(Prefs.loadConfig(context).enableLogging)
+    val configInit = remember { Prefs.loadConfig(context) }
+    var enableLogging by remember { mutableStateOf(configInit.enableLogging) }
+    var logLevel by remember { mutableStateOf(configInit.logLevel) }
+    var logBufferSize by remember { mutableStateOf(configInit.logBufferSize) }
+
+    val levelOptions = remember { io.github.erenche.syncclipboard.common.model.LogLevel.entries }
+    val levelLabels = listOf(
+        stringResource(R.string.log_level_debug),
+        stringResource(R.string.log_level_info),
+        stringResource(R.string.log_level_warn),
+        stringResource(R.string.log_level_error)
+    )
+    val bufferOptions = remember { listOf(500, 1000, 2000, 5000, 10000) }
+    val bufferLabels = remember(bufferOptions) {
+        bufferOptions.map { "${it}" }
     }
 
-    val onToggle: (Boolean) -> Unit = { enabled ->
-        enableLogging = enabled
+    fun pushConfig(newConfig: AppConfig) {
         try {
-            val config = Prefs.loadConfig(context).copy(enableLogging = enabled)
-            Prefs.saveConfig(context, config)
-            // 立即同步到 app 进程的 Logger
-            Logger.enabled = enabled
-            Logger.logLevel = config.logLevel
-            val configJson = Json.encodeToString(AppConfig.serializer(), config)
+            Prefs.saveConfig(context, newConfig)
+            Logger.enabled = newConfig.enableLogging
+            Logger.logLevel = newConfig.logLevel
+            Logger.maxBufferSize = newConfig.logBufferSize
+            val configJson = Json.encodeToString(AppConfig.serializer(), newConfig)
             val payload = android.os.Bundle().apply { putString("config", configJson) }
             SyncClipboardBridge.with(context)
                 .to("com.android.systemui")
@@ -675,7 +686,48 @@ fun LoggingSettingsCard(context: android.content.Context) {
             checked = enableLogging,
             title = stringResource(R.string.setting_enable_logging),
             summary = stringResource(R.string.setting_enable_logging_summary),
-            onCheckedChange = onToggle
+            onCheckedChange = { enabled ->
+                enableLogging = enabled
+                pushConfig(Prefs.loadConfig(context).copy(enableLogging = enabled))
+            }
+        )
+        AnimatedVisibility(
+            visible = enableLogging,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column {
+                val selectedLevelIndex = remember(logLevel, levelOptions) {
+                    levelOptions.indexOf(logLevel).coerceAtLeast(0)
+                }
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.setting_log_level),
+                    summary = stringResource(R.string.setting_log_level_summary),
+                    items = levelLabels,
+                    selectedIndex = selectedLevelIndex,
+                    onSelectedIndexChange = { index ->
+                        val newLevel = levelOptions[index]
+                        logLevel = newLevel
+                        pushConfig(Prefs.loadConfig(context).copy(logLevel = newLevel))
+                    }
+                )
+            }
+        }
+        val selectedBufferIndex = remember(logBufferSize, bufferOptions) {
+            var idx = bufferOptions.indexOf(logBufferSize)
+            if (idx < 0) idx = 2 // 默认 2000
+            idx
+        }
+        OverlayDropdownPreference(
+            title = stringResource(R.string.setting_log_buffer_size),
+            summary = stringResource(R.string.setting_log_buffer_size_summary, logBufferSize),
+            items = bufferLabels,
+            selectedIndex = selectedBufferIndex,
+            onSelectedIndexChange = { index ->
+                val newSize = bufferOptions[index]
+                logBufferSize = newSize
+                pushConfig(Prefs.loadConfig(context).copy(logBufferSize = newSize))
+            }
         )
     }
 }

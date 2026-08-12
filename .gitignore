@@ -27,3 +27,9 @@ Thumbs.db
 .cxx/
 .externalNativeBuild/
 captures/
+
+# 调试产物
+logcat_out.txt
+modules_config.db
+modules_config.db-wal
+modules_config.db-shm

@@ -41,6 +41,8 @@ data class AppConfig(
     val enableLogging: Boolean = true,
     /** 日志等级 */
     val logLevel: LogLevel = LogLevel.Info,
+    /** 内存日志缓冲区最大行数 */
+    val logBufferSize: Int = 2000,
     /** 历史记录最大保留条数 */
     val maxHistoryItems: Int = 1000,
     /** 自动同步时是否将图片/文件自动保存到相册/下载目录 */
@@ -49,7 +51,11 @@ data class AppConfig(
     val enableSmsUpload: Boolean = false,
     /** 自动上传通知验证码：监听所有应用通知，提取验证码后上传到服务器。
      *  需要用户在系统设置中授予"通知访问权限"。独立于 [enableSmsUpload]。 */
-    val enableNotificationUpload: Boolean = false
+    val enableNotificationUpload: Boolean = false,
+    /** 是否启用 SignalR 推送（仅 SyncClipboard 官方服务器模式生效）。
+     *  开启后通过 WebSocket 长连接接收服务器推送，轮询降级为 60s 兜底；
+     *  WebDAV/S3 模式忽略此选项，始终走轮询。 */
+    val enableSignalRPush: Boolean = true
 )
 
 /**

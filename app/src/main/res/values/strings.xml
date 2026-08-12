@@ -26,6 +26,7 @@
     <string name="action_save">Save</string>
     <string name="action_delete">Delete</string>
     <string name="action_clear">Clear</string>
+    <string name="action_more">More</string>
     <string name="action_add">Add</string>
     <string name="action_edit">Edit</string>
     <string name="action_back">Back</string>
@@ -119,8 +120,11 @@
     <string name="setting_auto_download_max_size">Auto-download Max Size</string>
     <string name="setting_auto_download_max_size_summary">Maximum file size for auto-download (MB)</string>
     <string name="setting_log_level">Log Level</string>
+    <string name="setting_log_level_summary">Minimum level to output and record</string>
     <string name="setting_enable_logging">Enable Logging</string>
-    <string name="setting_enable_logging_summary">Output detailed logs to logcat (Warn/Error always shown when off)</string>
+    <string name="setting_enable_logging_summary">Output logs to logcat and in-app log viewer (no logs when off)</string>
+    <string name="setting_log_buffer_size">Log Buffer Size</string>
+    <string name="setting_log_buffer_size_summary">Maximum log lines kept in memory (%1$d lines)</string>
     <string name="setting_auto_save">Auto Save Files</string>
     <string name="setting_auto_save_summary">Automatically save synced images to gallery and files to downloads</string>
     <string name="setting_sms_upload">Upload SMS Codes</string>
@@ -148,6 +152,15 @@
     <string name="item_history_summary">View synced clipboard history</string>
     <string name="item_log">Logs</string>
     <string name="item_log_summary">View sync engine logs</string>
+    <string name="log_level_debug">Debug</string>
+    <string name="log_level_info">Info</string>
+    <string name="log_level_warn">Warn</string>
+    <string name="log_level_error">Error</string>
+    <string name="log_search_hint">Search logs…</string>
+    <string name="log_export">Export</string>
+    <string name="log_export_success">Exported to Downloads: %1$s</string>
+    <string name="log_export_failed">Export failed: %1$s</string>
+    <string name="log_empty">No logs</string>
     <string name="item_more">More</string>
     <string name="item_more_summary">Settings, history, logs, about</string>
     <string name="item_about_app">About</string>
@@ -178,6 +191,7 @@
     <string name="history_copy">Copy to clipboard</string>
     <string name="history_delete">Delete</string>
     <string name="history_star">Star</string>
+    <string name="history_unstar">Unstar</string>
     <string name="history_pin">Pin</string>
     <string name="history_search">Search history…</string>
     <string name="history_copied">Copied to clipboard</string>
@@ -192,6 +206,24 @@
     <string name="history_total_count">Total %d items</string>
     <string name="history_selected_count">%d selected</string>
     <string name="history_delete_selected">Delete (%d)</string>
+    <string name="activity_transfer">Transfers</string>
+    <string name="transfer_empty">No downloads in queue</string>
+    <string name="transfer_summary">%1$d active / %2$d total</string>
+    <string name="transfer_waiting">Waiting</string>
+    <string name="transfer_progress">%1$d%%</string>
+    <string name="transfer_completed">Saved</string>
+    <string name="transfer_completed_detail">Saved to gallery / Downloads</string>
+    <string name="transfer_failed">Download failed</string>
+    <string name="transfer_cancelled">Cancelled</string>
+    <string name="transfer_cancel">Cancel</string>
+    <string name="transfer_cancel_all">Cancel all</string>
+    <string name="transfer_clear_finished">Clear</string>
+    <string name="transfer_retry">Retry</string>
+    <string name="transfer_remove">Remove</string>
+    <string name="transfer_download_selected">Download (%d)</string>
+    <string name="transfer_added">%d item(s) added to transfer queue</string>
+    <string name="transfer_added_single">Added to transfer queue</string>
+    <string name="transfer_menu_with_count">Transfers (%1$d)</string>
 
     <!-- About -->
     <string name="about_version">Version %s</string>

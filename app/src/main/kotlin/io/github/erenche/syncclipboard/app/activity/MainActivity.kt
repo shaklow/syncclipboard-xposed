@@ -26,12 +26,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import androidx.lifecycle.lifecycleScope
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.SyncClipboardApp
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
 import io.github.erenche.syncclipboard.app.viewmodel.MainViewModel
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
+import io.github.erenche.syncclipboard.bridge.BridgeSecurity
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.AppConfig
@@ -69,26 +69,18 @@ class MainActivity : BaseActivity(), SyncClipboardApp.XposedServiceStateListener
         SyncClipboardApp.removeXposedServiceStateListener(this)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 缓存文件可能被"清除缓存"等外部操作删除，检测后重置预览状态
+        if (viewModel.downloadedFile.value?.exists() != true) {
+            viewModel.clearDownloadedState()
+        }
+    }
+
     override fun onServiceStateChanged(service: io.github.libxposed.service.XposedService?) {
         viewModel.isModuleActive.value = service != null
-        if (service != null) {
-            lifecycleScope.launch {
-                try {
-                    val config = Prefs.loadConfig(this@MainActivity)
-                    val configJson = Json.encodeToString(AppConfig.serializer(), config)
-                    val payload = android.os.Bundle().apply { putString("config", configJson) }
-                    SyncClipboardBridge.with(this@MainActivity)
-                        .key(BridgeKeys.PUSH_CONFIG)
-                        .payload(payload)
-                        .send()
-                    SyncClipboardBridge.with(this@MainActivity)
-                        .to("com.android.systemui")
-                        .key(BridgeKeys.PUSH_CONFIG)
-                        .payload(payload)
-                        .send()
-                } catch (_: Exception) {}
-            }
-        }
+        // 配置推送由 MainScreen 的 LaunchedEffect 统一负责（引擎端对相同配置幂等跳过），
+        // 这里不再重复推送，避免 app 启动时多次 PUSH_CONFIG 触发 SignalR 重建
     }
 }
 
@@ -138,11 +130,12 @@ fun MainScreen(viewModel: MainViewModel) {
         viewModel.refreshRemoteContent()
     }
 
-    // 监听内容变化广播，自动刷新服务器最新内容
+    // 监听内容变化广播，只读取缓存刷新 UI（不触发服务端拉取，避免循环）
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                viewModel.refreshRemoteContent()
+                if (!BridgeSecurity.isTrustedSender(context)) return
+                viewModel.refreshRemoteContentCache()
             }
         }
         ContextCompat.registerReceiver(

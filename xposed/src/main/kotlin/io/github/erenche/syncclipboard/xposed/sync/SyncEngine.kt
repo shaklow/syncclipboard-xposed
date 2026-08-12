@@ -11,21 +11,33 @@ import io.github.erenche.syncclipboard.common.model.ClipboardContent
 import io.github.erenche.syncclipboard.common.model.ClipboardContentType
 import io.github.erenche.syncclipboard.common.model.DEFAULT_APP_CONFIG
 import io.github.erenche.syncclipboard.common.model.HistoryItem
+import io.github.erenche.syncclipboard.common.model.HistoryRecordDto
+import io.github.erenche.syncclipboard.common.model.HistorySyncStatus
 import io.github.erenche.syncclipboard.common.model.ProfileDto
 import io.github.erenche.syncclipboard.common.model.ServerConfig
+import io.github.erenche.syncclipboard.common.model.ServerType
 import io.github.erenche.syncclipboard.common.util.HashUtils
 import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.api.ClientFactory
+import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
@@ -61,6 +73,18 @@ class SyncEngine private constructor() {
     private var historyService: HistoryService? = null
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
+    /** SignalR 推送客户端（仅官方服务器模式创建） */
+    @Volatile
+    private var signalRClient: SignalRClient? = null
+    /** SignalR 是否已连接（连接时轮询降级为 60s 兜底） */
+    @Volatile
+    var isSignalRConnected: Boolean = false
+        private set
+    /** 历史推送事件通道：串行化处理，避免批量推送时协程堆积 */
+    private val historyPushChannel = Channel<HistoryRecordDto>(Channel.UNLIMITED)
+    /** 历史推送通道消费者协程 */
+    private var historyPushConsumer: Job? = null
+
     private var processName: String = "unknown"
 
     /** 本地哈希去重 — 同步检查防止竞态 */
@@ -69,8 +93,23 @@ class SyncEngine private constructor() {
     @Volatile
     private var lastRemoteHash: String? = null
 
+    /** 最近一次从服务器拉取（或上传）的 ProfileDto — 供 app 端通过 IPC 查询 */
+    @Volatile
+    private var lastRemoteProfile: ProfileDto? = null
+    /** 最近一次下载到本地的文件路径 — 供 app 端预览 */
+    @Volatile
+    private var lastRemoteFilePath: String? = null
+
     @Volatile
     private var isRunning = false
+
+    /** 正在从服务器拉取中（防止轮询与 IPC 触发的 force fetch 并发） */
+    @Volatile
+    private var isFetching = false
+
+    /** 手动刷新请求排队标志：轮询 fetch 进行中收到 force 时置位，当前拉取结束后补跑 */
+    @Volatile
+    private var pendingForceFetch = false
 
     @Volatile
     var isConnected: Boolean = false
@@ -88,8 +127,10 @@ class SyncEngine private constructor() {
     /** 历史同步互斥锁，防止并发 syncHistory 调用 */
     private val historySyncMutex = Mutex()
 
-    /** 每次同步最多 PATCH 的记录数，避免单次同步耗时过长 */
-    private val MAX_PATCH_PER_SYNC = 20
+    /** 每次同步最多 PATCH 的记录数。
+     *  PATCH 只传元数据（starred/pinned/isDelete/version），无文件上传，单条很轻量；
+     *  放宽到 100 以保证批量改动（如 clearAll、批量置顶）能在少数几次同步内推完。 */
+    private val MAX_PATCH_PER_SYNC = 100
 
     /** 连续失败次数。达到 [maxConsecutiveFailures] 后停止轮询，等待手动同步恢复。
      *  失败时按 [retryBackoffMs] 退避重试。 */
@@ -122,6 +163,7 @@ class SyncEngine private constructor() {
         lastSyncTime = Prefs.loadHistoryLastSyncTime(context)
         Logger.enabled = config.enableLogging
         Logger.logLevel = config.logLevel
+        Logger.maxBufferSize = config.logBufferSize
         rebuildApiClient()
         setupBridgeRouting(context)
         start()
@@ -147,6 +189,9 @@ class SyncEngine private constructor() {
         // 不使用 ClipboardHooker / 本地轮询，避免多路径竞态导致重复上传
         registerClipListener()
 
+        // 启动 SignalR 推送连接（仅官方服务器模式生效）
+        signalRClient?.start()
+
         // 远程轮询 — 定期从服务器拉取新内容
         scope.launch {
             while (isActive && isRunning) {
@@ -168,6 +213,20 @@ class SyncEngine private constructor() {
                             Logger.info(TAG, "Polling active")
                             notifySyncStateChanged()
                         }
+                        // 历史增量同步：每轮轮询后尝试增量拉取（tryLock 跳过并发）
+                        // 与 Win 端一致：后台定期增量同步，仅拉 modifiedAfter 之后的记录
+                        // 独立协程执行，避免首次全量同步（游标为 0 时）阻塞剪贴板轮询
+                        // 仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 API
+                        val server = config.servers.getOrNull(config.activeServerIndex)
+                        if (config.enableHistorySync && server?.type == ServerType.syncclipboard) {
+                            scope.launch {
+                                try {
+                                    syncHistory(force = false)
+                                } catch (e: Exception) {
+                                    Logger.warn(TAG, "Polling history sync error: ${e.message}")
+                                }
+                            }
+                        }
                     } else {
                         consecutiveFailures++
                         if (consecutiveFailures >= maxConsecutiveFailures && isPollingActive) {
@@ -178,10 +237,7 @@ class SyncEngine private constructor() {
                             Logger.info(TAG, "Remote fetch failed ($consecutiveFailures/${retryBackoffMs.size+1}), retry in ${retryBackoffMs[consecutiveFailures-1]}ms")
                         }
                     }
-                    // 历史同步独立执行，不依赖于剪贴板同步成功
-                    if (config.enableHistorySync) {
-                        syncHistory()
-                    }
+                    // 历史同步：轮询中自动增量同步（独立协程），手动刷新走 FORCE_SYNC_HISTORY
                 } else {
                     if (isPollingActive) {
                         isPollingActive = false
@@ -204,8 +260,13 @@ class SyncEngine private constructor() {
         Logger.info(TAG, "SyncEngine started, process=$processName")
     }
 
-    /** 轮询间隔（毫秒） */
+    /** 轮询间隔（毫秒）。
+     *  SignalR 推送连接成功时降级为 60s 兜底（防止推送断开时漏数据）；
+     *  断开时恢复用户配置的间隔。 */
     private fun pollingIntervalMs(): Long {
+        if (isSignalRConnected) {
+            return SignalRClient.PUSH_ACTIVE_POLLING_MS
+        }
         val sec = config.pollingIntervalSec
         return if (sec > 0) sec * 1000L else config.remotePollingInterval
     }
@@ -251,6 +312,8 @@ class SyncEngine private constructor() {
         isRunning = false
         isConnected = false
         isPollingActive = false
+        // 停止 SignalR 连接
+        signalRClient?.stop()
         try {
             val cm = appContext?.getSystemService(Context.CLIPBOARD_SERVICE)
                 as? android.content.ClipboardManager
@@ -365,9 +428,7 @@ class SyncEngine private constructor() {
                 notifyContentChanged()
                 if (config.enableAutoSync && config.enableBackgroundUpload) {
                     val uploaded = uploadContent(content)
-                    if (uploaded && config.enableHistorySync) {
-                        syncHistory()
-                    }
+                    // 历史同步改为手动触发，上传后不再自动 syncHistory
                 }
             } catch (e: Exception) {
                 Logger.error(TAG, "Error handling local clipboard change", e)
@@ -376,13 +437,27 @@ class SyncEngine private constructor() {
     }
 
     fun onConfigChanged(newConfig: AppConfig) {
+        // 幂等去重：app 启动/页面进入会多次推送相同配置，直接跳过重建，
+        // 避免 SignalR 客户端被反复 dispose/重建导致连接竞态与重复日志
+        if (newConfig == config) {
+            Logger.enabled = newConfig.enableLogging
+            Logger.logLevel = newConfig.logLevel
+            Logger.maxBufferSize = newConfig.logBufferSize
+            Logger.debug(TAG, "Config unchanged, skipping client rebuild")
+            return
+        }
         val oldServers = config.servers
         val oldActiveIdx = config.activeServerIndex
         config = newConfig
-        rebuildApiClient()
+        rebuildApiClient()  // 内部会重建 SignalR 客户端
+        // 配置变更后重启 SignalR 连接（若已创建）
+        if (isRunning) {
+            signalRClient?.start()
+        }
         // 同步日志开关到 Logger
         Logger.enabled = newConfig.enableLogging
         Logger.logLevel = newConfig.logLevel
+        Logger.maxBufferSize = newConfig.logBufferSize
         // 切换服务器时重置历史同步游标，触发全量同步
         val serverChanged = oldServers != newConfig.servers || oldActiveIdx != newConfig.activeServerIndex
         if (serverChanged) {
@@ -398,7 +473,7 @@ class SyncEngine private constructor() {
                 notifySyncStateChanged()
             }
         }
-        Logger.info(TAG, "Config changed, client rebuilt, logging=${newConfig.enableLogging}, autoSync=${newConfig.enableAutoSync}, pollingInterval=${newConfig.pollingIntervalSec}s")
+        Logger.info(TAG, "Config changed, client rebuilt, logging=${newConfig.enableLogging}, autoSync=${newConfig.enableAutoSync}, pollingInterval=${newConfig.pollingIntervalSec}s, signalRPush=${newConfig.enableSignalRPush}")
     }
 
     fun forceSync() {
@@ -407,10 +482,7 @@ class SyncEngine private constructor() {
             var message: String? = null
             try {
                 success = fetchRemoteClipboard(force = true)
-                // 历史同步独立执行，不依赖于剪贴板同步成功
-                if (config.enableHistorySync) {
-                    syncHistory()
-                }
+                // 历史同步改为手动触发（FORCE_SYNC_HISTORY），不在 forceSync 中执行
                 if (success) {
                     // 恢复轮询
                     consecutiveFailures = 0
@@ -444,20 +516,28 @@ class SyncEngine private constructor() {
      * 5. 上传 LocalOnly 记录（POST）—— 单条失败不中断整体
      * 6. 保存 lastSyncTime 游标
      *
-     * @param force true 时（用户手动触发）：等待已有同步完成后做全量同步；
+     * @param force true 时（用户手动触发）：等待已有同步完成（不跳过），但走增量同步；
      *              false 时（轮询触发）：已有同步进行中则直接跳过（tryLock）。
+     * @param fullSync true 时强制全量同步（重置游标）；仅在首次启动/配置切换等场景使用。
      */
-    private suspend fun syncHistory(force: Boolean = false): SyncHistoryResult {
+    private suspend fun syncHistory(force: Boolean = false, fullSync: Boolean = false): SyncHistoryResult {
         val client = apiClient ?: return SyncHistoryResult(false, 0, "API client is null")
         val hs = historyService ?: return SyncHistoryResult(false, 0, "History service is null")
         // 互斥锁：防止轮询、FORCE_SYNC_HISTORY、剪贴板变化触发并发 syncHistory
-        if (force) {
-            // 手动触发：等待正在进行的同步完成，再重置游标做全量同步
-            historySyncMutex.lock()
-            // 锁内重置游标，确保之前的同步不会覆盖这次重置
-            lastSyncTime = 0L
-            appContext?.let { Prefs.resetHistoryLastSyncTime(it) }
-            Logger.info(TAG, "syncHistory: force full sync, cursor reset")
+        if (force || fullSync) {
+            // 手动触发/全量：等待正在进行的同步完成（最多 15s，防止轮询同步卡住时
+            // 手动同步无限等待，导致 app 端刷新指示器一直转圈）
+            val locked = withTimeoutOrNull(15_000L) { historySyncMutex.lock() } != null
+            if (!locked) {
+                Logger.warn(TAG, "syncHistory: timed out waiting for in-progress sync")
+                return SyncHistoryResult(false, 0, "History sync timeout")
+            }
+            if (fullSync) {
+                // 全量同步：锁内重置游标
+                lastSyncTime = 0L
+                appContext?.let { Prefs.resetHistoryLastSyncTime(it) }
+                Logger.info(TAG, "syncHistory: full sync requested, cursor reset")
+            }
         } else {
             if (!historySyncMutex.tryLock()) {
                 Logger.debug(TAG, "syncHistory: skipped (another sync in progress)")
@@ -465,8 +545,10 @@ class SyncEngine private constructor() {
             }
         }
         try {
-            // 判断全量 or 增量：lastSyncTime == 0 表示首次/重置后，做全量
-            val isFullSync = lastSyncTime == 0L
+            // 批量模式：syncHistory 期间所有 saveToDisk 只标记脏，结束时统一落盘
+            hs.beginBatch()
+            // 判断全量 or 增量：fullSync 参数或 lastSyncTime == 0 表示全量
+            val isFullSync = fullSync || lastSyncTime == 0L
             val modifiedAfter: String? = if (isFullSync) null else {
                 java.time.Instant.ofEpochMilli(lastSyncTime).toString()
             }
@@ -525,87 +607,41 @@ class SyncEngine private constructor() {
                 Logger.warn(TAG, "syncHistory: full sync returned 0 records, skipping orphan detection to protect local data")
             }
 
-            // 4. 推送 NeedSync 记录的元数据变更到服务器（PATCH）
+            // 4. 推送 NeedSync 记录的元数据变更到服务器（PATCH）—— 并发化
             // 与 RN pushLocalChanges 一致，单条失败用 try-catch 包裹不中断整体
             val needSyncItems = hs.getNeedSyncItems().take(MAX_PATCH_PER_SYNC)
-            var patchSuccess = 0
-            var patchConflict = 0
-            var patchNotFound = 0
-            var patchFailed = 0
-            for (item in needSyncItems) {
-                try {
-                    var update = io.github.erenche.syncclipboard.common.model.HistoryRecordUpdateDto(
-                        starred = item.starred,
-                        pinned = item.pinned,
-                        isDelete = item.isDeleted,
-                        version = item.version,
-                        lastModified = java.time.Instant.ofEpochMilli(item.lastModified).toString()
-                    )
-                    var result = client.updateHistoryRecord(item.type, item.profileHash, update)
-                    if (result == null) {
-                        // 404：服务器不存在，降级为 LocalOnly（与 RN RecordNotFoundError 一致）
-                        hs.markAsLocalOnly(item.profileHash)
-                        patchNotFound++
-                    } else if (result.version != item.version) {
-                        // 409 冲突：服务器 version 较新
-                        // 仅更新本地 version，保持 NeedSync 和 isDeleted，然后重试一次
-                        hs.updateVersionOnly(item.profileHash, result)
-                        val retryItem = hs.getItemByProfileHash(item.profileHash)
-                        if (retryItem != null) {
-                            update = io.github.erenche.syncclipboard.common.model.HistoryRecordUpdateDto(
-                                starred = retryItem.starred,
-                                pinned = retryItem.pinned,
-                                isDelete = retryItem.isDeleted,
-                                version = retryItem.version,
-                                lastModified = java.time.Instant.ofEpochMilli(retryItem.lastModified).toString()
-                            )
-                            val retryResult = client.updateHistoryRecord(retryItem.type, retryItem.profileHash, update)
-                            if (retryResult == null) {
-                                hs.markAsLocalOnly(retryItem.profileHash)
-                                patchNotFound++
-                            } else if (retryResult.version != retryItem.version) {
-                                // 仍然冲突：放弃，以服务器为准
-                                hs.applyServerUpdate(retryItem.profileHash, retryResult)
-                                patchConflict++
-                            } else {
-                                hs.applyServerUpdate(retryItem.profileHash, retryResult)
-                                patchSuccess++
-                            }
-                        } else {
-                            patchConflict++
+            val patchSemaphore = Semaphore(5) // 限制并发度，避免压垮服务器
+            val patchResults = coroutineScope {
+                needSyncItems.map { item ->
+                    async(Dispatchers.IO) {
+                        patchSemaphore.withPermit {
+                            processPatchItem(item, client, hs)
                         }
-                    } else {
-                        // 成功：以服务器版本为准
-                        hs.applyServerUpdate(item.profileHash, result)
-                        patchSuccess++
                     }
-                } catch (e: Exception) {
-                    Logger.warn(TAG, "syncHistory: PATCH failed for ${item.profileHash}: ${e.message}")
-                    patchFailed++
-                }
+                }.awaitAll()
             }
+            val patchSuccess = patchResults.count { it == PatchOutcome.SUCCESS }
+            val patchConflict = patchResults.count { it == PatchOutcome.CONFLICT }
+            val patchNotFound = patchResults.count { it == PatchOutcome.NOT_FOUND }
+            val patchFailed = patchResults.count { it == PatchOutcome.FAILED }
             Logger.info(TAG, "syncHistory: PATCH needSync=${needSyncItems.size}, success=$patchSuccess, conflict=$patchConflict, notFound=$patchNotFound, failed=$patchFailed")
 
-            // 5. 上传 LocalOnly 记录（POST）——仅无数据文件的小记录
+            // 5. 上传 LocalOnly 记录（POST）——仅无数据文件的小记录，并发化
             // 与 RN pushLocalOnlyRecords 一致，单条失败用 try-catch 包裹不中断整体
-            val localOnlyItems = hs.getUnsyncedRecords()
-            var uploadSuccess = 0
-            var uploadConflict = 0
-            var uploadFailed = 0
-            for ((item, _) in localOnlyItems) {
-                if (item.hasData) continue // 有数据文件的记录移动端不上传
-                try {
-                    val dto = hs.toDto(item)
-                    val result = client.uploadHistoryRecord(dto, null)
-                    if (result != null) {
-                        hs.applyServerUpdate(item.profileHash, result)
-                        if (result.version != item.version) uploadConflict++ else uploadSuccess++
+            val localOnlyItems = hs.getUnsyncedRecords().filter { !it.first.hasData }
+            val postSemaphore = Semaphore(5)
+            val postResults = coroutineScope {
+                localOnlyItems.map { (item, _) ->
+                    async(Dispatchers.IO) {
+                        postSemaphore.withPermit {
+                            processPostItem(item, client, hs)
+                        }
                     }
-                } catch (e: Exception) {
-                    Logger.warn(TAG, "syncHistory: POST failed for ${item.profileHash}: ${e.message}")
-                    uploadFailed++
-                }
+                }.awaitAll()
             }
+            val uploadSuccess = postResults.count { it == PostOutcome.SUCCESS }
+            val uploadConflict = postResults.count { it == PostOutcome.CONFLICT }
+            val uploadFailed = postResults.count { it == PostOutcome.FAILED }
             Logger.info(TAG, "syncHistory: POST localOnly=${localOnlyItems.size}, success=$uploadSuccess, conflict=$uploadConflict, failed=$uploadFailed")
 
             // 6. 保存 lastSyncTime 游标（与 RN 一致，在整个同步流程完成后保存）
@@ -620,7 +656,94 @@ class SyncEngine private constructor() {
             Logger.warn(TAG, "syncHistory failed: ${e.message}", e)
             return SyncHistoryResult(false, 0, e.message ?: "Unknown error")
         } finally {
+            // 统一落盘一次（批量模式期间的所有变更）
+            hs.endBatch()
             historySyncMutex.unlock()
+        }
+    }
+
+    /** PATCH 单条处理结果 */
+    private enum class PatchOutcome { SUCCESS, CONFLICT, NOT_FOUND, FAILED }
+
+    /** 处理单条 NeedSync 记录的 PATCH（含 409 冲突重试一次） */
+    private suspend fun processPatchItem(
+        item: HistoryItem,
+        client: SyncClipboardApi,
+        hs: HistoryService
+    ): PatchOutcome {
+        return try {
+            var update = io.github.erenche.syncclipboard.common.model.HistoryRecordUpdateDto(
+                starred = item.starred,
+                pinned = item.pinned,
+                isDelete = item.isDeleted,
+                version = item.version,
+                lastModified = java.time.Instant.ofEpochMilli(item.lastModified).toString()
+            )
+            var result = client.updateHistoryRecord(item.type, item.profileHash, update)
+            if (result == null) {
+                // 404：服务器不存在，降级为 LocalOnly（与 RN RecordNotFoundError 一致）
+                hs.markAsLocalOnly(item.profileHash)
+                PatchOutcome.NOT_FOUND
+            } else if (result.version != item.version) {
+                // 409 冲突：服务器 version 较新
+                // 仅更新本地 version，保持 NeedSync 和 isDeleted，然后重试一次
+                hs.updateVersionOnly(item.profileHash, result)
+                val retryItem = hs.getItemByProfileHash(item.profileHash)
+                if (retryItem != null) {
+                    update = io.github.erenche.syncclipboard.common.model.HistoryRecordUpdateDto(
+                        starred = retryItem.starred,
+                        pinned = retryItem.pinned,
+                        isDelete = retryItem.isDeleted,
+                        version = retryItem.version,
+                        lastModified = java.time.Instant.ofEpochMilli(retryItem.lastModified).toString()
+                    )
+                    val retryResult = client.updateHistoryRecord(retryItem.type, retryItem.profileHash, update)
+                    if (retryResult == null) {
+                        hs.markAsLocalOnly(retryItem.profileHash)
+                        PatchOutcome.NOT_FOUND
+                    } else if (retryResult.version != retryItem.version) {
+                        // 仍然冲突：放弃，以服务器为准
+                        hs.applyServerUpdate(retryItem.profileHash, retryResult)
+                        PatchOutcome.CONFLICT
+                    } else {
+                        hs.applyServerUpdate(retryItem.profileHash, retryResult)
+                        PatchOutcome.SUCCESS
+                    }
+                } else {
+                    PatchOutcome.CONFLICT
+                }
+            } else {
+                // 成功：以服务器版本为准
+                hs.applyServerUpdate(item.profileHash, result)
+                PatchOutcome.SUCCESS
+            }
+        } catch (e: Exception) {
+            Logger.warn(TAG, "syncHistory: PATCH failed for ${item.profileHash}: ${e.message}")
+            PatchOutcome.FAILED
+        }
+    }
+
+    /** POST 单条处理结果 */
+    private enum class PostOutcome { SUCCESS, CONFLICT, FAILED }
+
+    /** 上传单条 LocalOnly 记录到服务器 */
+    private suspend fun processPostItem(
+        item: HistoryItem,
+        client: SyncClipboardApi,
+        hs: HistoryService
+    ): PostOutcome {
+        return try {
+            val dto = hs.toDto(item)
+            val result = client.uploadHistoryRecord(dto, null)
+            if (result != null) {
+                hs.applyServerUpdate(item.profileHash, result)
+                if (result.version != item.version) PostOutcome.CONFLICT else PostOutcome.SUCCESS
+            } else {
+                PostOutcome.FAILED
+            }
+        } catch (e: Exception) {
+            Logger.warn(TAG, "syncHistory: POST failed for ${item.profileHash}: ${e.message}")
+            PostOutcome.FAILED
         }
     }
 
@@ -663,10 +786,7 @@ class SyncEngine private constructor() {
                 historyService?.addLocalContent(content)
                 notifyContentChanged()
                 success = uploadContent(content)
-                // 上传成功且开启历史同步时，同步历史到服务器
-                if (success && config.enableHistorySync) {
-                    syncHistory()
-                }
+                // 历史同步改为手动触发，上传后不再自动 syncHistory
                 message = if (success) "Upload OK" else "Upload failed"
             } catch (e: Exception) {
                 Logger.error(TAG, "Force upload failed", e)
@@ -722,7 +842,7 @@ class SyncEngine private constructor() {
                 historyService?.addLocalContent(content)
                 notifyContentChanged()
                 val ok = uploadContent(content)
-                if (ok && config.enableHistorySync) syncHistory()
+                // 历史同步改为手动触发，上传后不再自动 syncHistory
                 Logger.info(TAG, "uploadText: ok=$ok text=${text.take(20)}")
             } catch (e: Exception) {
                 Logger.error(TAG, "uploadText failed", e)
@@ -733,43 +853,117 @@ class SyncEngine private constructor() {
     // ─── 私有方法 ────────────────────────────────────────────────
 
     private suspend fun fetchRemoteClipboard(force: Boolean = false): Boolean {
-        val client = apiClient ?: run {
+        // 防护：避免轮询与 IPC 触发的 force fetch 并发下载同一内容
+        if (isFetching) {
+            if (force) {
+                // 手动刷新与轮询撞车：排队，当前拉取结束后补跑一次
+                pendingForceFetch = true
+                Logger.info(TAG, "fetchRemoteClipboard: fetching in progress, force fetch queued")
+            } else {
+                Logger.debug(TAG, "fetchRemoteClipboard: already fetching, skipping")
+            }
+            return true  // 已有拉取在进行中，视为成功（缓存稍后会更新）
+        }
+        isFetching = true
+
+        // 拉取 profile 并判断内容是否变化（唯一需要持有 isFetching 的临界区）。
+        // 网络请求完成后立即释放 isFetching：广播/下载/历史均为异步执行，
+        // 不占用 fetch 锁，避免下载卡住时阻塞轮询与后续手动刷新。
+        val client = apiClient
+        if (client == null) {
+            isFetching = false
             Logger.warn(TAG, "fetchRemoteClipboard: apiClient is null")
             return false
         }
 
-        try {
-            val profile = client.getClipboard()
-            if (profile == null) {
-                Logger.warn(TAG, "fetchRemoteClipboard: getClipboard returned null")
-                return false
-            }
-            Logger.info(TAG, "fetchRemoteClipboard: type=${profile.type}, hash=${profile.hash}, text=${profile.text.take(50)}, hasData=${profile.hasData}")
-            val hash = profile.hash ?: run {
-                Logger.warn(TAG, "fetchRemoteClipboard: profile.hash is null, skipping")
-                return false
-            }
-
-            if (!force && hash.equals(lastRemoteHash, ignoreCase = true)) {
-                // 内容未变化也算连接成功，更新连接状态
-                isConnected = true
-                return true
-            }
-            lastRemoteHash = hash
-
-            isConnected = true
-            lastSyncTime = System.currentTimeMillis()
-
-            Logger.info(TAG, "Remote clipboard changed: ${profile.text.take(50)}...")
-
-            if (force || config.enableBackgroundDownload) {
-                downloadAndApplyContent(profile)
-            }
-            return true
+        val profile = try {
+            client.getClipboard()
         } catch (e: Exception) {
+            isFetching = false
             isConnected = false
             Logger.warn(TAG, "Remote fetch error", e)
             return false
+        }
+        if (profile == null) {
+            isFetching = false
+            Logger.warn(TAG, "fetchRemoteClipboard: getClipboard returned null")
+            return false
+        }
+        Logger.info(TAG, "fetchRemoteClipboard: type=${profile.type}, hash=${profile.hash}, text=${profile.text.take(50)}, hasData=${profile.hasData}")
+        val hash = profile.hash
+        if (hash == null) {
+            isFetching = false
+            Logger.warn(TAG, "fetchRemoteClipboard: profile.hash is null, skipping")
+            return false
+        }
+
+        isConnected = true
+        lastSyncTime = System.currentTimeMillis()
+
+        // 网络部分完成，释放 isFetching，补跑排队的手动刷新
+        isFetching = false
+        if (pendingForceFetch) {
+            pendingForceFetch = false
+            if (apiClient != null) {
+                Logger.info(TAG, "Executing queued force fetch")
+                scope.launch {
+                    try {
+                        fetchRemoteClipboard(force = true)
+                    } catch (e: Exception) {
+                        Logger.warn(TAG, "Queued force fetch failed", e)
+                    }
+                }
+            }
+        }
+
+        val contentChanged = !hash.equals(lastRemoteHash, ignoreCase = true)
+
+        if (!force && !contentChanged) {
+            // 轮询且内容未变化：快速返回
+            return true
+        }
+
+        if (contentChanged) {
+            // 内容变化：先广播 profile（app 立即刷新并自行下载预览），
+            // 文件下载/历史记录/自动保存由 notifyAndApplyAsync 后台继续，避免大文件阻塞 UI
+            lastRemoteHash = hash
+            Logger.info(TAG, "Remote clipboard changed: ${profile.text.take(50)}...")
+
+            if (force || config.enableBackgroundDownload) {
+                notifyAndApplyAsync(profile)
+            } else {
+                // 未开启后台下载：仅更新 profile 缓存，filePath 不变
+                lastRemoteProfile = profile
+                notifyContentChanged()
+            }
+        } else {
+            // 内容未变化：通知 app 停止转圈
+            // 补救：force 且内容有数据但 lastRemoteFilePath 为空（之前下载缺失/失败）时重新下载
+            if (force && profile.hasData && lastRemoteFilePath.isNullOrBlank() &&
+                (profile.type == ClipboardContentType.Image || profile.type == ClipboardContentType.File)) {
+                Logger.info(TAG, "Force fetch: content unchanged but file missing, re-downloading")
+                notifyAndApplyAsync(profile)
+            } else {
+                if (lastRemoteProfile == null) {
+                    lastRemoteProfile = profile
+                }
+                notifyContentChanged()
+            }
+        }
+        return true
+    }
+
+    /** 先广播 profile 供 app 立即刷新（app 自行下载预览文件），
+     *  文件下载/历史记录/自动保存放到后台协程执行，避免大文件下载阻塞 fetch 返回与轮询。 */
+    private fun notifyAndApplyAsync(profile: ProfileDto) {
+        lastRemoteProfile = profile
+        notifyContentChanged()
+        scope.launch {
+            try {
+                downloadAndApplyContent(profile)
+            } catch (e: Exception) {
+                Logger.error(TAG, "Background download and apply failed", e)
+            }
         }
     }
 
@@ -801,6 +995,16 @@ class SyncEngine private constructor() {
             // 设置 lastRemoteHash，防止轮询循环立即下载刚上传的内容
             // 使用 uploadContent（已将 content:// 转为本地路径）保证文件 hash 可读
             lastRemoteHash = HashUtils.computeContentHash(uploadContent)
+            // 更新缓存，使 app 端能立即显示刚上传的内容
+            lastRemoteProfile = ProfileDto(
+                type = uploadContent.type,
+                hash = lastRemoteHash,
+                text = uploadContent.text,
+                hasData = uploadContent.hasData,
+                dataName = uploadContent.fileName,
+                size = uploadContent.fileSize
+            )
+            lastRemoteFilePath = uploadContent.fileUri?.takeIf { it.startsWith("/") }
             Logger.info(TAG, "Content uploaded successfully")
             return true
         } catch (e: Exception) {
@@ -833,8 +1037,15 @@ class SyncEngine private constructor() {
     }
 
     private suspend fun downloadAndApplyContent(profile: ProfileDto) {
-        val client = apiClient ?: return
-        val context = appContext ?: return
+        val client = apiClient ?: run {
+            Logger.warn(TAG, "downloadAndApplyContent: apiClient is null, skipping")
+            return
+        }
+        val context = appContext ?: run {
+            Logger.warn(TAG, "downloadAndApplyContent: context is null, skipping")
+            return
+        }
+        Logger.info(TAG, "downloadAndApplyContent: start, type=${profile.type}, hash=${profile.hash}, hasData=${profile.hasData}, dataName=${profile.dataName}")
 
         try {
             var downloadedFileUri: android.net.Uri? = null
@@ -842,13 +1053,14 @@ class SyncEngine private constructor() {
             if (profile.hasData && profile.dataName != null) {
                 val name = profile.dataName!!
                 val destPath = "${context.filesDir}/downloads/$name"
+                Logger.info(TAG, "downloadAndApplyContent: downloading file $name")
                 client.downloadFile(name, destPath)
-                // 设置文件可读，使其他应用能通过 file:// URI 访问
                 val destFile = java.io.File(destPath)
-                destFile.setReadable(true, false)
                 downloadedFileUri = android.net.Uri.fromFile(destFile)
                 downloadedFilePath = destPath
-                Logger.info(TAG, "File downloaded: $name -> $destPath")
+                Logger.info(TAG, "File downloaded: $name -> $destPath (size=${destFile.length()})")
+            } else {
+                Logger.debug(TAG, "downloadAndApplyContent: no file data, skipping download")
             }
 
             // 写入剪贴板前设置 lastLocalHash，防止 listener 二次上传
@@ -862,6 +1074,7 @@ class SyncEngine private constructor() {
             // 有 dataName 但 hasData=false 时也不写入（可能是文件上传中间状态）。
             if (profile.type == ClipboardContentType.Text && !profile.hasData &&
                 profile.dataName.isNullOrBlank()) {
+                Logger.debug(TAG, "downloadAndApplyContent: writing text to clipboard")
                 writeToClipboard(profile.text)
             }
 
@@ -869,6 +1082,7 @@ class SyncEngine private constructor() {
             if (config.enableAutoSave && downloadedFilePath != null &&
                 (profile.type == ClipboardContentType.Image || profile.type == ClipboardContentType.File)) {
                 try {
+                    Logger.debug(TAG, "downloadAndApplyContent: auto-saving file")
                     autoSaveToFile(context, downloadedFilePath!!, profile.type, profile.dataName)
                 } catch (e: Exception) {
                     Logger.warn(TAG, "Auto save failed: ${e.message}")
@@ -888,7 +1102,12 @@ class SyncEngine private constructor() {
                 timestamp = System.currentTimeMillis()
             )
             historyService?.addRemoteContent(historyContent, downloadedFilePath)
+            Logger.debug(TAG, "downloadAndApplyContent: history recorded")
+            lastRemoteFilePath = downloadedFilePath
+            // 缓存一致性：profile 与 filePath 同时更新后再通知 UI
+            lastRemoteProfile = profile
             notifyContentChanged()
+            Logger.debug(TAG, "downloadAndApplyContent: notified app")
 
             lastSyncTime = System.currentTimeMillis()
             Logger.info(TAG, "Remote content applied to local clipboard")
@@ -1031,6 +1250,22 @@ class SyncEngine private constructor() {
         }
     }
 
+    /** 通知 app 进程历史同步已完成（异步通知，配合 FORCE_SYNC_HISTORY 异步化） */
+    private fun notifyHistorySyncCompleted(success: Boolean, fetched: Int, count: Int, error: String?) {
+        val context = appContext ?: return
+        try {
+            val intent = Intent(BridgeKeys.EVENT_HISTORY_SYNC_COMPLETED)
+                .setPackage("io.github.erenche.syncclipboard")
+                .putExtra("success", success)
+                .putExtra("fetched", fetched)
+                .putExtra("count", count)
+            if (error != null) intent.putExtra("error", error)
+            context.sendBroadcast(intent)
+        } catch (e: Exception) {
+            Logger.warn(TAG, "Failed to notify history sync completed: ${e.message}")
+        }
+    }
+
     private fun rebuildApiClient() {
         val server = config.servers.getOrNull(config.activeServerIndex)
         apiClient = if (server != null) {
@@ -1042,6 +1277,117 @@ class SyncEngine private constructor() {
             }
         } else {
             null
+        }
+        // SignalR 仅在官方服务器模式且配置开启时创建
+        rebuildSignalRClient(server)
+    }
+
+    /** 根据服务器类型和配置创建/销毁 SignalR 客户端 */
+    private fun rebuildSignalRClient(server: ServerConfig?) {
+        // 先停止并释放旧连接
+        signalRClient?.let { old ->
+            old.dispose()
+            signalRClient = null
+            isSignalRConnected = false
+            Logger.info(TAG, "SignalR client disposed")
+        }
+        // 取消旧的推送消费者
+        historyPushConsumer?.cancel()
+        historyPushConsumer = null
+
+        if (server == null) return
+        // 仅官方服务器模式且配置开启时启用
+        if (server.type != ServerType.syncclipboard) {
+            Logger.info(TAG, "SignalR skipped: server type=${server.type}")
+            return
+        }
+        if (!config.enableSignalRPush) {
+            Logger.info(TAG, "SignalR skipped: disabled by config")
+            return
+        }
+
+        try {
+            val client = SignalRClient(
+                baseUrl = server.url,
+                username = server.username,
+                password = server.password
+            )
+            client.onProfileChanged = { profile ->
+                // 推送回调：触发强制拉取（复用 fetchRemoteClipboard 的去重和下载逻辑）
+                scope.launch {
+                    Logger.info(TAG, "SignalR push: RemoteProfileChanged, triggering fetch")
+                    fetchRemoteClipboard(force = true)
+                }
+            }
+            client.onHistoryChanged = { dto ->
+                // 推送事件送入通道串行化处理，避免批量推送时协程堆积
+                historyPushChannel.trySend(dto)
+            }
+            client.onConnectionStateChanged = { connected ->
+                isSignalRConnected = connected
+                Logger.info(TAG, "SignalR connection: ${if (connected) "connected" else "disconnected"}")
+                notifySyncStateChanged()
+            }
+            signalRClient = client
+            // 启动历史推送通道消费者（串行处理，避免批量推送时协程堆积）
+            startHistoryPushConsumer()
+            Logger.info(TAG, "SignalR client created for server: ${server.url}")
+        } catch (e: Exception) {
+            Logger.warn(TAG, "Failed to create SignalR client: ${e.message}")
+        }
+    }
+
+    /** 启动历史推送通道消费者：串行处理推送事件，避免并发协程堆积 */
+    private fun startHistoryPushConsumer() {
+        historyPushConsumer?.cancel()
+        historyPushConsumer = scope.launch {
+            for (dto in historyPushChannel) {
+                try {
+                    handleRemoteHistoryChanged(dto)
+                } catch (e: Exception) {
+                    Logger.warn(TAG, "History push consumer error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /** 处理 SignalR 推送的历史记录变化（增量合并单条 DTO）。
+     *  与 syncHistory 互斥，避免全量合并覆盖推送写入的新版本。 */
+    private suspend fun handleRemoteHistoryChanged(dto: HistoryRecordDto) {
+        val hs = historyService ?: return
+        if (!config.enableHistorySync) return
+        historySyncMutex.withLock {
+            try {
+                Logger.info(TAG, "SignalR push: RemoteHistoryChanged, hash=${dto.hash}, merging")
+                hs.mergeFromServerDtos(listOf(dto))
+                // 通知 app 端历史记录已变化，触发 UI 刷新
+                notifyContentChanged()
+            } catch (e: Exception) {
+                Logger.warn(TAG, "Failed to merge remote history push: ${e.message}")
+            }
+        }
+    }
+
+    /** 单条历史记录变更后即时 PATCH 推送到服务器。
+     *  获取 historySyncMutex 避免与 syncHistory 并发，复用 processPatchItem 逻辑。
+     *  仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 PATCH，仅做本地变更。 */
+    private suspend fun pushSingleHistoryUpdate(id: String) {
+        val hs = historyService ?: return
+        val client = apiClient ?: return
+        val server = config.servers.getOrNull(config.activeServerIndex)
+        if (server == null || server.type != ServerType.syncclipboard) return
+        val item = hs.getById(id) ?: return
+        if (item.syncStatus != HistorySyncStatus.NeedSync) return
+        historySyncMutex.withLock {
+            // 重新读取，避免在等待锁期间状态被其他流程改变
+            val current = hs.getById(id) ?: return@withLock
+            if (current.syncStatus != HistorySyncStatus.NeedSync) return@withLock
+            try {
+                val outcome = processPatchItem(current, client, hs)
+                Logger.info(TAG, "pushSingleHistoryUpdate: hash=${current.profileHash}, outcome=$outcome")
+            } catch (e: Exception) {
+                Logger.warn(TAG, "pushSingleHistoryUpdate failed: ${e.message}")
+            }
         }
     }
 
@@ -1068,7 +1414,32 @@ class SyncEngine private constructor() {
                     putBoolean("connected", isConnected)
                     putBoolean("running", isRunning)
                     putBoolean("pollingActive", isPollingActive)
+                    putBoolean("signalRConnected", isSignalRConnected)
                     putLong("lastSyncTime", lastSyncTime)
+                })
+            }
+
+            onQuery(BridgeKeys.GET_CURRENT_CLIPBOARD) {
+                // 立即返回当前缓存用于快速渲染，绝不阻塞 IPC
+                // 仅当 payload forceFetch=true（用户下拉刷新）时触发异步强制拉取
+                // 广播触发的刷新只读缓存，避免 fetch→notify→fetch 循环
+                val forceFetch = data.getBoolean("forceFetch", false)
+                if (forceFetch && apiClient != null) {
+                    scope.launch {
+                        try {
+                            fetchRemoteClipboard(force = true)
+                        } catch (e: Exception) {
+                            Logger.warn(TAG, "GET_CURRENT_CLIPBOARD: async fetch failed", e)
+                        }
+                    }
+                }
+                val profile = lastRemoteProfile
+                val profileJson = profile?.let {
+                    Json.encodeToString(ProfileDto.serializer(), it)
+                }
+                reply(Bundle().apply {
+                    if (profileJson != null) putString("profile", profileJson)
+                    if (lastRemoteFilePath != null) putString("filePath", lastRemoteFilePath)
                 })
             }
 
@@ -1094,22 +1465,46 @@ class SyncEngine private constructor() {
                 reply(Bundle().apply { putString("items", itemsJson) })
             }
 
+            onQuery(BridgeKeys.GET_HISTORY_PAGED) {
+                // 分页查询：减少 IPC 序列化数据量，避免 UI 全量重载卡顿
+                val offset = data.getInt("offset", 0)
+                val limit = data.getInt("limit", 50)
+                val searchText = data.getString("searchText")
+                val hs = historyService
+                if (hs != null) {
+                    val pageItems = hs.getPaged(offset, limit, searchText)
+                    val totalCount = hs.count(searchText)
+                    val itemsJson = Json.encodeToString(
+                        ListSerializer(HistoryItem.serializer()), pageItems
+                    )
+                    reply(Bundle().apply {
+                        putString("items", itemsJson)
+                        putInt("totalCount", totalCount)
+                    })
+                } else {
+                    reply(Bundle().apply {
+                        putString("items", "[]")
+                        putInt("totalCount", 0)
+                    })
+                }
+            }
+
             onQuery(BridgeKeys.FORCE_SYNC_HISTORY) {
                 if (config.enableHistorySync) {
-                    // 手动下拉刷新：force=true 等待已有同步完成后做全量同步，确保服务器条数正确
-                    val result = syncHistory(force = true)
-                    val localCount = historyService?.getAll()?.size ?: 0
-                    Logger.info(TAG, "FORCE_SYNC_HISTORY: success=${result.success}, fetched=${result.recordsFetched}, local=$localCount, error=${result.error}")
-                    reply(Bundle().apply {
-                        putBoolean("success", result.success)
-                        putInt("fetched", result.recordsFetched)
-                        putInt("count", localCount)
-                        result.error?.let { putString("error", it) }
-                    })
+                    // 异步化：立即回复"已开始"，后台执行增量同步，完成后广播通知
+                    // 注意：手动刷新走增量同步（force=true 等待锁，但不重置游标）
+                    // 全量同步仅在首次启动/配置切换时通过 forceFullSync() 触发
+                    reply(Bundle().apply { putBoolean("started", true) })
+                    scope.launch {
+                        val result = syncHistory(force = true, fullSync = false)
+                        val localCount = historyService?.getAll()?.size ?: 0
+                        Logger.info(TAG, "FORCE_SYNC_HISTORY: success=${result.success}, fetched=${result.recordsFetched}, local=$localCount, error=${result.error}")
+                        notifyHistorySyncCompleted(result.success, result.recordsFetched, localCount, result.error)
+                    }
                 } else {
                     Logger.warn(TAG, "FORCE_SYNC_HISTORY: history sync disabled")
                     reply(Bundle().apply {
-                        putBoolean("success", false)
+                        putBoolean("started", false)
                         putString("error", "History sync disabled")
                     })
                 }
@@ -1119,6 +1514,24 @@ class SyncEngine private constructor() {
                 val id = data.getString("id") ?: return@onCommand
                 historyService?.delete(id)
                 Logger.info(TAG, "History item deleted: $id")
+            }
+
+            onCommand(BridgeKeys.UPDATE_HISTORY_ITEM) { data ->
+                val id = data.getString("id") ?: return@onCommand
+                val action = data.getString("action") ?: "toggleStar"
+                val hs = historyService ?: return@onCommand
+                when (action) {
+                    "toggleStar" -> {
+                        hs.toggleStar(id)
+                        Logger.info(TAG, "History item star toggled: $id")
+                        scope.launch { pushSingleHistoryUpdate(id) }
+                    }
+                    "togglePin" -> {
+                        hs.togglePin(id)
+                        Logger.info(TAG, "History item pin toggled: $id")
+                        scope.launch { pushSingleHistoryUpdate(id) }
+                    }
+                }
             }
 
             onCommand(BridgeKeys.CLEAR_HISTORY) {
@@ -1155,12 +1568,12 @@ class SyncEngine private constructor() {
 
             onQuery(BridgeKeys.GET_LOGS) {
                 val logs = Logger.getLogs()
-                Logger.info(TAG, "GET_LOGS: returning ${logs.length} chars")
                 reply(Bundle().apply { putString("logs", logs) })
             }
 
-            onCommand(BridgeKeys.CLEAR_LOGS) {
+            onQuery(BridgeKeys.CLEAR_LOGS) {
                 Logger.clear()
+                reply(Bundle().apply { putBoolean("success", true) })
             }
         }
     }

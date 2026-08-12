@@ -5,6 +5,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -78,19 +79,40 @@ private fun resolveColors(context: android.content.Context, dark: Boolean): Colo
 /**
  * 将自定义 primary 颜色应用到基础颜色方案。
  *
- * 调整与 primary 相关的多个字段以保持整体视觉协调。
+ * 参考 Material Design 3 色调（Tone）系统：
+ * - 亮色模式：primary ≈ tone 40，primaryContainer ≈ tone 90，onPrimaryContainer ≈ tone 10
+ * - 暗色模式：primary ≈ tone 80，primaryContainer ≈ tone 30，onPrimaryContainer ≈ tone 90
+ *
+ * 使用 [lerp] 在 primary 与黑/白之间插值，保持色相的同时调整明度和饱和度，
+ * 比纯 alpha 叠加 surface 的方式更接近 MD3 视觉效果。
  */
 private fun applyPrimaryColor(base: Colors, primary: Color, dark: Boolean): Colors {
     // 根据 primary 亮度决定 onPrimary（保证对比度）
     val onPrimary = if (primary.luminance() > 0.5f) Color.Black else Color.White
-    // primary 的半透明变体，用于容器类字段
-    val primaryContainer = primary.copy(
-        alpha = if (dark) 0.30f else 0.15f
-    ).compositeOver(base.surface)
-    val onPrimaryContainer = if (dark) primary else primary
-    val tertiaryContainer = primary.copy(
-        alpha = if (dark) 0.20f else 0.12f
-    ).compositeOver(base.surface)
+
+    // primaryContainer：亮色偏白(tone 90)，暗色偏黑(tone 30)
+    val primaryContainer = if (dark) {
+        lerp(primary, Color.Black, 0.6f)
+    } else {
+        lerp(primary, Color.White, 0.85f)
+    }
+    // onPrimaryContainer：亮色偏黑(tone 10)，暗色偏白(tone 90)
+    val onPrimaryContainer = if (dark) {
+        lerp(primary, Color.White, 0.7f)
+    } else {
+        lerp(primary, Color.Black, 0.7f)
+    }
+    // tertiaryContainer / onTertiaryContainer 同理
+    val tertiaryContainer = if (dark) {
+        lerp(primary, Color.Black, 0.5f)
+    } else {
+        lerp(primary, Color.White, 0.8f)
+    }
+    val onTertiaryContainer = if (dark) {
+        lerp(primary, Color.White, 0.6f)
+    } else {
+        lerp(primary, Color.Black, 0.6f)
+    }
 
     return base.copy(
         primary = primary,
@@ -99,24 +121,10 @@ private fun applyPrimaryColor(base: Colors, primary: Color, dark: Boolean): Colo
         primaryContainer = primaryContainer,
         onPrimaryContainer = onPrimaryContainer,
         tertiaryContainer = tertiaryContainer,
-        onTertiaryContainer = primary,
+        onTertiaryContainer = onTertiaryContainer,
         tertiaryContainerVariant = tertiaryContainer,
-        // 滑块关键点颜色跟随 primary
-        sliderKeyPoint = primary.copy(alpha = 0.3f),
-        sliderKeyPointForeground = primary,
+        // 滑块关键点：半透明 primary，前景根据 primary 亮度选黑/白保证可见
+        sliderKeyPoint = primary.copy(alpha = if (dark) 0.4f else 0.3f),
+        sliderKeyPointForeground = onPrimary,
     )
-}
-
-/**
- * 将 [this]（带 alpha）合成到 [background] 之上。
- */
-private fun Color.compositeOver(background: Color): Color {
-    val fgAlpha = alpha
-    if (fgAlpha >= 1f) return this
-    val a = fgAlpha + background.alpha * (1f - fgAlpha)
-    if (a <= 0f) return Color.Transparent
-    val r = (red * fgAlpha + background.red * background.alpha * (1f - fgAlpha)) / a
-    val g = (green * fgAlpha + background.green * background.alpha * (1f - fgAlpha)) / a
-    val b = (blue * fgAlpha + background.blue * background.alpha * (1f - fgAlpha)) / a
-    return Color(r, g, b, a)
 }

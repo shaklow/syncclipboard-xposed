@@ -56,8 +56,11 @@ object BridgeKeys {
 
     // ─── 历史记录（app → xposed 进程）──────────────────────────
 
-    /** 查询历史记录列表 */
+    /** 查询历史记录列表（全量，仅用于同步场景） */
     const val GET_HISTORY = "get_history"
+
+    /** 分页查询历史记录（offset/limit/searchText，返回 items + totalCount） */
+    const val GET_HISTORY_PAGED = "get_history_paged"
 
     /** 强制同步历史记录（从服务器拉取完整历史） */
     const val FORCE_SYNC_HISTORY = "force_sync_history"
@@ -87,6 +90,9 @@ object BridgeKeys {
 
     /** 传输进度事件 */
     const val EVENT_TRANSFER_PROGRESS = "event_transfer_progress"
+
+    /** 历史同步完成事件（异步通知，syncHistory 完成后推送） */
+    const val EVENT_HISTORY_SYNC_COMPLETED = "event_history_sync_completed"
 
     // ─── 日志（app → xposed 进程）─────────────────────────────
     /** 查询日志（返回最近日志文本） */
