@@ -116,9 +116,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .await()
                 val running = bundle.getBoolean("running", false)
                 val pollingActive = bundle.getBoolean("pollingActive", false)
+                val connected = bundle.getBoolean("connected", false)
+                val signalRConnected = bundle.getBoolean("signalRConnected", false)
+                // 状态判定的关键：pollingActive 表示"有拉取循环在跑"，
+                // 还需 combined 连接状态真实可达（最近一次 fetch 成功或 SignalR 在连），
+                // 否则网络断开但退避重试期间会误显示"同步中"
                 _syncStatus.value = when {
                     !running -> R.string.sync_status_stopped
-                    pollingActive -> R.string.sync_status_running
+                    pollingActive && (connected || signalRConnected) -> R.string.sync_status_running
                     else -> R.string.sync_status_stopped
                 }
             } catch (e: Exception) {

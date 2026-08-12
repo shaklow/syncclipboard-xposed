@@ -115,6 +115,11 @@
     <string name="setting_stop_polling_screen_off_summary">屏幕关闭时暂停远程轮询</string>
     <string name="setting_polling_interval">轮询间隔</string>
     <string name="setting_polling_interval_summary">每 %1$d 秒查询一次远程剪贴板</string>
+    <string name="setting_screen_off_disconnect">息屏后断开连接</string>
+    <string name="setting_screen_off_disconnect_summary">息屏 %1$s 后断开推送连接以省电，亮屏时自动重连</string>
+    <string name="setting_screen_off_disconnect_disabled">不启用</string>
+    <string name="setting_disconnect_battery_saver">省电模式断开连接</string>
+    <string name="setting_disconnect_battery_saver_summary">省电模式下断开推送连接</string>
     <string name="setting_history_sync">历史记录同步</string>
     <string name="setting_history_sync_summary">将剪贴板历史同步到服务器</string>
     <string name="setting_auto_download_max_size">自动下载最大大小</string>

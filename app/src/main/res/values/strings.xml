@@ -115,6 +115,11 @@
     <string name="setting_stop_polling_screen_off_summary">Pause remote polling when the screen is off</string>
     <string name="setting_polling_interval">Polling Interval</string>
     <string name="setting_polling_interval_summary">Fetch remote clipboard every %1$d seconds</string>
+    <string name="setting_screen_off_disconnect">Disconnect After Screen Off</string>
+    <string name="setting_screen_off_disconnect_summary">Disconnect push connection after screen off (%1$s) to save battery; reconnects on screen on</string>
+    <string name="setting_screen_off_disconnect_disabled">Disabled</string>
+    <string name="setting_disconnect_battery_saver">Disconnect in Battery Saver</string>
+    <string name="setting_disconnect_battery_saver_summary">Disconnect push connection when battery saver is on</string>
     <string name="setting_history_sync">History Sync</string>
     <string name="setting_history_sync_summary">Sync clipboard history with server</string>
     <string name="setting_auto_download_max_size">Auto-download Max Size</string>

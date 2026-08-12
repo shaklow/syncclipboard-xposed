@@ -372,8 +372,16 @@ fun SyncSettingsCard(context: android.content.Context) {
     var stopOnBattery by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnBatterySaver) }
     var stopOnScreenOff by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnScreenOff) }
     var pollingIntervalSec by remember { mutableStateOf(Prefs.loadConfig(context).pollingIntervalSec.coerceAtLeast(1)) }
+    var screenOffDelaySec by remember { mutableStateOf(Prefs.loadConfig(context).screenOffDisconnectDelaySec) }
     var smsUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableSmsUpload) }
     var notifUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableNotificationUpload) }
+
+    // 当前激活服务器类型：SyncClipboard 官方服务器显示息屏断开/省电断开设置，
+    // 其他模式（WebDAV/S3）保留轮询间隔与息屏/省电停止轮询
+    val isSyncClipboardServer = remember {
+        val cfg = Prefs.loadConfig(context)
+        cfg.servers.getOrNull(cfg.activeServerIndex)?.type == io.github.erenche.syncclipboard.common.model.ServerType.syncclipboard
+    }
 
     val intervalOptions = remember { listOf(1, 3, 5, 10, 15, 30, 60, 120, 300, 600) }
     val intervalLabels = remember(intervalOptions) {
@@ -492,6 +500,11 @@ fun SyncSettingsCard(context: android.content.Context) {
         pushConfig(Prefs.loadConfig(context).copy(pollingIntervalSec = sec))
     }
 
+    fun updateScreenOffDisconnectDelay(sec: Int) {
+        screenOffDelaySec = sec
+        pushConfig(Prefs.loadConfig(context).copy(screenOffDisconnectDelaySec = sec))
+    }
+
     fun toggleSmsUpload(enabled: Boolean) {
         if (enabled) {
             val hasPerm = ContextCompat.checkSelfPermission(
@@ -558,32 +571,67 @@ fun SyncSettingsCard(context: android.content.Context) {
                     summary = stringResource(R.string.setting_background_download_summary),
                     onCheckedChange = { toggleBgDownload(it) }
                 )
-                SwitchPreference(
-                    checked = stopOnBattery,
-                    title = stringResource(R.string.setting_stop_polling_battery_saver),
-                    summary = stringResource(R.string.setting_stop_polling_battery_saver_summary),
-                    onCheckedChange = { toggleStopOnBattery(it) }
-                )
-                SwitchPreference(
-                    checked = stopOnScreenOff,
-                    title = stringResource(R.string.setting_stop_polling_screen_off),
-                    summary = stringResource(R.string.setting_stop_polling_screen_off_summary),
-                    onCheckedChange = { toggleStopOnScreenOff(it) }
-                )
-                val selectedIntervalIndex = remember(pollingIntervalSec, intervalOptions) {
-                    var idx = intervalOptions.indexOf(pollingIntervalSec)
-                    if (idx < 0) idx = 1 // 默认 3s
-                    idx
-                }
-                OverlayDropdownPreference(
-                    title = stringResource(R.string.setting_polling_interval),
-                    summary = stringResource(R.string.setting_polling_interval_summary, pollingIntervalSec),
-                    items = intervalLabels,
-                    selectedIndex = selectedIntervalIndex,
-                    onSelectedIndexChange = { index ->
-                        updatePollingInterval(intervalOptions[index])
+                if (isSyncClipboardServer) {
+                    // ─── SyncClipboard 官方服务器模式：SignalR 推送，省电优化项 ───
+                    val screenOffOptions = listOf(0, 60, 300, 600, 900, 1800, 3600)
+                    val disabledLabel = stringResource(R.string.setting_screen_off_disconnect_disabled)
+                    val screenOffLabels = remember(screenOffOptions, disabledLabel) {
+                        screenOffOptions.map { sec ->
+                            if (sec == 0) disabledLabel else "${sec / 60}min"
+                        }
                     }
-                )
+                    val selectedScreenOffIndex = remember(screenOffDelaySec, screenOffOptions) {
+                        var idx = screenOffOptions.indexOf(screenOffDelaySec)
+                        if (idx < 0) idx = 0 // 默认不启用
+                        idx
+                    }
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.setting_screen_off_disconnect),
+                        summary = stringResource(
+                            R.string.setting_screen_off_disconnect_summary,
+                            screenOffLabels[selectedScreenOffIndex]
+                        ),
+                        items = screenOffLabels,
+                        selectedIndex = selectedScreenOffIndex,
+                        onSelectedIndexChange = { index ->
+                            updateScreenOffDisconnectDelay(screenOffOptions[index])
+                        }
+                    )
+                    SwitchPreference(
+                        checked = stopOnBattery,
+                        title = stringResource(R.string.setting_disconnect_battery_saver),
+                        summary = stringResource(R.string.setting_disconnect_battery_saver_summary),
+                        onCheckedChange = { toggleStopOnBattery(it) }
+                    )
+                } else {
+                    // ─── WebDAV/S3 模式：保留轮询相关设置 ───
+                    SwitchPreference(
+                        checked = stopOnBattery,
+                        title = stringResource(R.string.setting_stop_polling_battery_saver),
+                        summary = stringResource(R.string.setting_stop_polling_battery_saver_summary),
+                        onCheckedChange = { toggleStopOnBattery(it) }
+                    )
+                    SwitchPreference(
+                        checked = stopOnScreenOff,
+                        title = stringResource(R.string.setting_stop_polling_screen_off),
+                        summary = stringResource(R.string.setting_stop_polling_screen_off_summary),
+                        onCheckedChange = { toggleStopOnScreenOff(it) }
+                    )
+                    val selectedIntervalIndex = remember(pollingIntervalSec, intervalOptions) {
+                        var idx = intervalOptions.indexOf(pollingIntervalSec)
+                        if (idx < 0) idx = 1 // 默认 3s
+                        idx
+                    }
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.setting_polling_interval),
+                        summary = stringResource(R.string.setting_polling_interval_summary, pollingIntervalSec),
+                        items = intervalLabels,
+                        selectedIndex = selectedIntervalIndex,
+                        onSelectedIndexChange = { index ->
+                            updatePollingInterval(intervalOptions[index])
+                        }
+                    )
+                }
             }
         }
         // 短信验证码自动上传：不依赖自动同步总开关，关闭自动同步后仍可见
