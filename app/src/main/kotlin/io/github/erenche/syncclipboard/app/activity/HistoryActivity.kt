@@ -15,24 +15,24 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
 import android.graphics.BitmapFactory
 import io.github.erenche.syncclipboard.app.R
@@ -51,9 +52,11 @@ import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.ClipboardContentType
 import io.github.erenche.syncclipboard.common.model.HistoryItem
+import io.github.erenche.syncclipboard.common.model.ServerType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
@@ -73,12 +76,16 @@ import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.PressFeedbackType
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class HistoryActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -156,6 +163,16 @@ fun HistoryScreen() {
     }
 
     fun refreshFromServer() {
+        // WebDAV/S3 模式不支持从服务器获取剪贴板历史，仅刷新本地数据
+        val config = Prefs.loadConfig(context)
+        val activeServer = config.activeServerIndex.let { idx ->
+            if (idx in config.servers.indices) config.servers[idx] else null
+        }
+        if (activeServer?.type != ServerType.syncclipboard) {
+            refreshing = true
+            scope.launch { loadHistoryPage(currentPage) }
+            return
+        }
         refreshing = true
         scope.launch {
             try {
@@ -192,6 +209,23 @@ fun HistoryScreen() {
         }
         items = items.filterNot { it.id == id }
         HistoryActivity.previewCache.remove(id)
+    }
+
+    /** 切换收藏状态（同步到 SystemUI 触发即时 PATCH + 本地列表乐观更新）。 */
+    fun toggleStarItem(id: String) {
+        scope.launch {
+            val payload = Bundle().apply {
+                putString("id", id)
+                putString("action", "toggleStar")
+            }
+            SyncClipboardBridge.with(context)
+                .to("com.android.systemui")
+                .key(BridgeKeys.UPDATE_HISTORY_ITEM)
+                .payload(payload)
+                .send()
+        }
+        // 乐观更新本地列表的收藏状态
+        items = items.map { if (it.id == id) it.copy(starred = !it.starred) else it }
     }
 
     /** 批量删除选中的记录。 */
@@ -459,6 +493,7 @@ fun HistoryScreen() {
                             selected = historyItem.id in selectedIds,
                             onToggleSelect = { toggleSelect(historyItem.id) },
                             onDelete = { deleteItem(historyItem.id) },
+                            onToggleStar = { toggleStarItem(historyItem.id) },
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -520,9 +555,9 @@ private fun HistoryPaginationBar(
     }
 }
 
-// ─── 可左滑删除 / 长按多选的记录卡片 ─────────────────────────────
+// ─── 可左滑删除 / 右滑收藏 / 长按多选的记录卡片 ──────────────────
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SwipeableHistoryCard(
     item: HistoryItem,
@@ -532,42 +567,71 @@ private fun SwipeableHistoryCard(
     selected: Boolean,
     onToggleSelect: () -> Unit,
     onDelete: () -> Unit,
+    onToggleStar: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cardShape = RoundedCornerShape(16.dp)
     // 长文本展开状态
     var expanded by remember(item.id) { mutableStateOf(false) }
 
-    // 左滑：松手确认后先让卡片滑出，再从列表移除（配合 animateItem 补位动画）
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            // 只允许左滑方向，且非多选模式；返回 true 使其停在“已滑出”状态并播放退出动画
-            !selectionMode && value == SwipeToDismissBoxValue.EndToStart
-        }
-    )
+    // 滑动偏移量（0f = 原位，正 = 右滑，负 = 左滑）。
+    // 用普通 state 同步更新，避免 Animatable + launch 的帧级延迟导致卡片跟不上手指
+    var offsetX by remember(item.id) { mutableStateOf(0f) }
+    // 卡片宽度（像素），用于计算触发阈值和左滑退出距离
+    var cardWidthPx by remember { mutableStateOf(0) }
+    // 回弹/滑出动画的 Job：拖动开始时取消，防止动画与拖动手势互相覆盖
+    var settleJob by remember(item.id) { mutableStateOf<Job?>(null) }
 
-    // 当滑动稳定到“已滑出”状态时，执行删除（此时卡片已移出屏幕，删除后下方内容平滑补位）
-    LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-            onDelete()
-        }
-    }
+    val currentOnToggleStar by rememberUpdatedState(onToggleStar)
+    val currentOnDelete by rememberUpdatedState(onDelete)
 
-    SwipeToDismissBox(
-        state = dismissState,
+    Box(
         modifier = modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        enableDismissFromStartToEnd = false,
-        enableDismissFromEndToStart = !selectionMode,
-        backgroundContent = {
-            // 左滑露出的删除背景 + 图标（主题感知 error 色）
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(cardShape)
-                    .background(MiuixTheme.colorScheme.error),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+    ) {
+        // ── 背景层：根据偏移方向显示收藏或删除背景 ──
+        // 静止（|offsetX| 小于 1px）时隐藏，避免按压缩放（Sink）露出红色/主题色边框。
+        // 注意用阈值而非 ==0：spring 回弹浮点不会精确归零
+        val bgAlpha by animateFloatAsState(
+            targetValue = if (abs(offsetX) < 1f) 0f else 1f,
+            animationSpec = folmeSpring(damping = 0.9f, response = 0.2f),
+            label = "swipeBgAlpha",
+        )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(cardShape)
+                // alpha 必须在 background 之前（外层）：graphicsLayer 只作用于其后/更内层的绘制，
+                // 放在 background 后面时背景色不受透明度影响，红色会一直露出来
+                .alpha(bgAlpha)
+                .background(
+                    if (offsetX > 0f) MiuixTheme.colorScheme.primary
+                    else MiuixTheme.colorScheme.error
+                ),
+            contentAlignment = if (offsetX > 0f) Alignment.CenterStart else Alignment.CenterEnd,
+        ) {
+            if (offsetX > 0f) {
+                // 右滑：收藏背景
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(start = 24.dp)
+                ) {
+                    Text(
+                        text = if (item.starred) "☆" else "★",
+                        style = MiuixTheme.textStyles.title2,
+                        color = MiuixTheme.colorScheme.onPrimary,
+                    )
+                    Text(
+                        text = stringResource(
+                            if (item.starred) R.string.history_unstar else R.string.history_star
+                        ),
+                        style = MiuixTheme.textStyles.body1,
+                        color = MiuixTheme.colorScheme.onPrimary,
+                    )
+                }
+            } else {
+                // 左滑：删除背景
                 Icon(
                     imageVector = MiuixIcons.Delete,
                     contentDescription = stringResource(R.string.action_delete),
@@ -578,18 +642,70 @@ private fun SwipeableHistoryCard(
                 )
             }
         }
-    ) {
+
+        // ── 前景层：可滑动的卡片 ──
+        // 交互（点击展开/长按多选）与按压反馈交由 Miuix Card 处理，
+        // 滑动手势在此层独立注册，与点击互斥（drag 消费事件后点击自动取消）
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(cardShape)
-                .combinedClickable(
-                    // 非多选：点击展开/收起长文本；多选：点击切换勾选
-                    onClick = {
-                        if (selectionMode) onToggleSelect() else expanded = !expanded
-                    },
-                    onLongClick = { if (!selectionMode) onToggleSelect() },
-                ),
+                .onSizeChanged { cardWidthPx = it.width }
+                .offset { IntOffset(offsetX.roundToInt(), 0) }
+                .pointerInput(selectionMode, item.id) {
+                    if (selectionMode) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            // 开始拖动：取消进行中的回弹/滑出动画，以手指为准
+                            settleJob?.cancel()
+                            settleJob = null
+                        },
+                        onDragEnd = {
+                            val threshold = cardWidthPx * 0.25f
+                            val current = offsetX
+                            when {
+                                current > threshold -> {
+                                    // 右滑超过阈值 → 收藏 + 回弹
+                                    currentOnToggleStar()
+                                    settleJob = scope.launch {
+                                        val anim = Animatable(offsetX)
+                                        anim.animateTo(0f, folmeSpring(damping = 0.9f, response = 0.35f)) { offsetX = value }
+                                        offsetX = 0f // 精确归零，避免浮点残留
+                                    }
+                                }
+                                current < -threshold -> {
+                                    // 左滑超过阈值 → 滑出 + 删除
+                                    settleJob = scope.launch {
+                                        val anim = Animatable(offsetX)
+                                        anim.animateTo(-cardWidthPx.toFloat(), folmeSpring(damping = 0.9f, response = 0.3f)) { offsetX = value }
+                                        currentOnDelete()
+                                    }
+                                }
+                                else -> {
+                                    // 未超过阈值 → 回弹（结束后精确归零）
+                                    settleJob = scope.launch {
+                                        val anim = Animatable(offsetX)
+                                        anim.animateTo(0f, folmeSpring(damping = 0.9f, response = 0.3f)) { offsetX = value }
+                                        offsetX = 0f
+                                    }
+                                }
+                            }
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            // 若回弹动画进行中则先取消，由手指接管
+                            settleJob?.cancel()
+                            settleJob = null
+                            offsetX += dragAmount
+                        }
+                    )
+                },
+            // 不用 Sink 缩放反馈：按压缩放会与点击展开的高度动画叠加导致鬼畜，改为无缩放
+            pressFeedbackType = PressFeedbackType.None,
+            onClick = {
+                if (selectionMode) onToggleSelect() else expanded = !expanded
+            },
+            onLongPress = { if (!selectionMode) onToggleSelect() },
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (selectionMode) {

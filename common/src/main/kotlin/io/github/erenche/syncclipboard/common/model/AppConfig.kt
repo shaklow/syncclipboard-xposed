@@ -51,7 +51,11 @@ data class AppConfig(
     val enableSmsUpload: Boolean = false,
     /** 自动上传通知验证码：监听所有应用通知，提取验证码后上传到服务器。
      *  需要用户在系统设置中授予"通知访问权限"。独立于 [enableSmsUpload]。 */
-    val enableNotificationUpload: Boolean = false
+    val enableNotificationUpload: Boolean = false,
+    /** 是否启用 SignalR 推送（仅 SyncClipboard 官方服务器模式生效）。
+     *  开启后通过 WebSocket 长连接接收服务器推送，轮询降级为 60s 兜底；
+     *  WebDAV/S3 模式忽略此选项，始终走轮询。 */
+    val enableSignalRPush: Boolean = true
 )
 
 /**

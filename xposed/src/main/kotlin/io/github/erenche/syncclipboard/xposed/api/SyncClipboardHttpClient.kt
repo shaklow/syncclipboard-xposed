@@ -21,7 +21,6 @@ import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.readBytes
 import io.ktor.http.ContentType
@@ -30,7 +29,6 @@ import io.ktor.http.contentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders as KtorHttpHeaders
 import io.ktor.serialization.kotlinx.json.json
-import io.ktor.utils.io.jvm.javaio.toInputStream
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -113,17 +111,20 @@ class SyncClipboardHttpClient(
         val destFile = File(destinationPath)
         destFile.parentFile?.mkdirs()
 
-        client.get("$baseUrl$FILE_ENDPOINT${java.net.URLEncoder.encode(fileName, "UTF-8")}") {
+        val response = client.get("$baseUrl$FILE_ENDPOINT${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}") {
             if (username != null && password != null) {
                 header(HttpHeaders.Authorization, buildAuthHeader())
             }
-        }.bodyAsChannel().toInputStream().use { input ->
-            destFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
         }
+        if (response.status.value !in 200..299) {
+            val body = try { response.bodyAsText() } catch (_: Exception) { "" }
+            Logger.warn(TAG, "downloadFile: server returned ${response.status.value}: ${body.take(300)}")
+            throw IllegalStateException("File download failed: server returned ${response.status.value}")
+        }
+        val bytes = response.readBytes()
+        destFile.writeBytes(bytes)
 
-        Logger.info(TAG, "File downloaded: $fileName -> $destinationPath")
+        Logger.info(TAG, "File downloaded: $fileName -> $destinationPath (${bytes.size} bytes)")
         return destinationPath
     }
 
@@ -132,7 +133,7 @@ class SyncClipboardHttpClient(
         if (!file.exists()) throw IllegalStateException("File not found: $filePath")
 
         // Upload via multipart or raw bytes depending on server implementation
-        client.put("$baseUrl$FILE_ENDPOINT${java.net.URLEncoder.encode(fileName, "UTF-8")}") {
+        client.put("$baseUrl$FILE_ENDPOINT${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}") {
             if (username != null && password != null) {
                 header(HttpHeaders.Authorization, buildAuthHeader())
             }

@@ -190,6 +190,7 @@
     <string name="history_copy">复制到剪贴板</string>
     <string name="history_delete">删除</string>
     <string name="history_star">收藏</string>
+    <string name="history_unstar">取消收藏</string>
     <string name="history_pin">置顶</string>
     <string name="history_search">搜索历史…</string>
     <string name="history_copied">已复制到剪贴板</string>

@@ -70,6 +70,14 @@ class MainActivity : BaseActivity(), SyncClipboardApp.XposedServiceStateListener
         SyncClipboardApp.removeXposedServiceStateListener(this)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 缓存文件可能被"清除缓存"等外部操作删除，检测后重置预览状态
+        if (viewModel.downloadedFile.value?.exists() != true) {
+            viewModel.clearDownloadedState()
+        }
+    }
+
     override fun onServiceStateChanged(service: io.github.libxposed.service.XposedService?) {
         viewModel.isModuleActive.value = service != null
         if (service != null) {

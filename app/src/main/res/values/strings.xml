@@ -190,6 +190,7 @@
     <string name="history_copy">Copy to clipboard</string>
     <string name="history_delete">Delete</string>
     <string name="history_star">Star</string>
+    <string name="history_unstar">Unstar</string>
     <string name="history_pin">Pin</string>
     <string name="history_search">Search history…</string>
     <string name="history_copied">Copied to clipboard</string>
