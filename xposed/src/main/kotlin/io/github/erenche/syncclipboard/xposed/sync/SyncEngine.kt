@@ -1,8 +1,11 @@
 package io.github.erenche.syncclipboard.xposed.sync
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
+import android.os.PowerManager
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
@@ -120,6 +123,19 @@ class SyncEngine private constructor() {
     var isPollingActive: Boolean = false
         private set
 
+    // ─── 息屏/省电断开 SignalR（仅 SyncClipboard 官方服务器模式）───
+    private var powerStateReceiver: BroadcastReceiver? = null
+    private var screenOffDisconnectJob: Job? = null
+    /** 息屏延迟断开已触发 */
+    @Volatile
+    private var screenOffPaused = false
+    /** 省电模式断开已触发 */
+    @Volatile
+    private var batterySaverPaused = false
+    /** 是否已应用暂停（断开 SignalR + 暂停轮询） */
+    @Volatile
+    private var powerPauseApplied = false
+
     @Volatile
     var lastSyncTime: Long = 0
         private set
@@ -166,6 +182,7 @@ class SyncEngine private constructor() {
         Logger.maxBufferSize = config.logBufferSize
         rebuildApiClient()
         setupBridgeRouting(context)
+        registerPowerStateMonitor()
         start()
 
         Logger.info(TAG, "SyncEngine initialized, servers=${config.servers.size}, activeIdx=${config.activeServerIndex}")
@@ -196,6 +213,7 @@ class SyncEngine private constructor() {
         scope.launch {
             while (isActive && isRunning) {
                 val shouldPoll = config.enableAutoSync &&
+                        !powerPauseApplied &&
                         !isPowerSaveModeBlocked() &&
                         !isScreenOffBlocked() &&
                         consecutiveFailures < maxConsecutiveFailures
@@ -229,9 +247,11 @@ class SyncEngine private constructor() {
                         }
                     } else {
                         consecutiveFailures++
-                        if (consecutiveFailures >= maxConsecutiveFailures && isPollingActive) {
+                        // 失败即停止活动标记：让状态即时反映真实连通性，
+                        // 退避重试期间保持 false，成功时再恢复
+                        if (isPollingActive) {
                             isPollingActive = false
-                            Logger.warn(TAG, "Polling stopped: $consecutiveFailures consecutive failures")
+                            Logger.warn(TAG, "Polling paused: $consecutiveFailures consecutive failures")
                             notifySyncStateChanged()
                         } else if (consecutiveFailures <= retryBackoffMs.size) {
                             Logger.info(TAG, "Remote fetch failed ($consecutiveFailures/${retryBackoffMs.size+1}), retry in ${retryBackoffMs[consecutiveFailures-1]}ms")
@@ -244,7 +264,7 @@ class SyncEngine private constructor() {
                         notifySyncStateChanged()
                     }
                     if (!config.enableAutoSync) {
-                        if (isConnected) isConnected = false
+                        setConnected(false)
                     }
                 }
                 // 失败时按退避间隔重试；正常时使用配置的轮询间隔
@@ -287,6 +307,114 @@ class SyncEngine private constructor() {
         return pm?.isInteractive == false
     }
 
+    // ─── 息屏/省电断开 SignalR（仅 SyncClipboard 官方服务器模式）───
+
+    /** SignalR 断开功能是否可用：官方服务器模式且开启 SignalR 推送 */
+    private fun isSignalRDisconnectEnabled(): Boolean {
+        val server = config.servers.getOrNull(config.activeServerIndex)
+        return server?.type == ServerType.syncclipboard && config.enableSignalRPush
+    }
+
+    /** 注册屏幕开关与省电模式广播监听 */
+    private fun registerPowerStateMonitor() {
+        try {
+            val ctx = appContext ?: return
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    when (intent.action) {
+                        Intent.ACTION_SCREEN_OFF -> onScreenOff()
+                        Intent.ACTION_SCREEN_ON -> onScreenOn()
+                        PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> onPowerSaveModeChanged()
+                    }
+                }
+            }
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            }
+            ctx.registerReceiver(receiver, filter)
+            powerStateReceiver = receiver
+            Logger.info(TAG, "Power state monitor registered")
+        } catch (e: Exception) {
+            Logger.warn(TAG, "Failed to register power state monitor: ${e.message}")
+        }
+    }
+
+    /** 息屏：延迟 [AppConfig.screenOffDisconnectDelaySec] 秒后仍息屏则断开 SignalR */
+    private fun onScreenOff() {
+        val delaySec = config.screenOffDisconnectDelaySec
+        if (delaySec <= 0 || !isSignalRDisconnectEnabled()) return
+        if (screenOffDisconnectJob?.isActive == true) return
+        Logger.info(TAG, "Screen off, disconnecting SignalR in ${delaySec}s")
+        screenOffDisconnectJob = scope.launch {
+            delay(delaySec * 1000L)
+            val pm = appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm?.isInteractive == false) {
+                Logger.info(TAG, "Screen still off after ${delaySec}s, pausing SignalR")
+                screenOffPaused = true
+                applyPowerPause()
+            }
+        }
+    }
+
+    /** 亮屏：取消延迟断开任务，恢复 SignalR 并补拉一次 */
+    private fun onScreenOn() {
+        screenOffDisconnectJob?.cancel()
+        screenOffDisconnectJob = null
+        if (screenOffPaused) {
+            Logger.info(TAG, "Screen on, resuming SignalR")
+            screenOffPaused = false
+            applyPowerPause()
+        }
+    }
+
+    /** 省电模式开关：开启且配置断开时暂停，关闭时恢复 */
+    private fun onPowerSaveModeChanged() {
+        if (!isSignalRDisconnectEnabled() && !batterySaverPaused) return
+        val pm = appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        if (pm.isPowerSaveMode) {
+            if (config.stopPollingOnBatterySaver && !batterySaverPaused) {
+                Logger.info(TAG, "Battery saver on, pausing SignalR")
+                batterySaverPaused = true
+                applyPowerPause()
+            }
+        } else if (batterySaverPaused) {
+            Logger.info(TAG, "Battery saver off, resuming SignalR")
+            batterySaverPaused = false
+            applyPowerPause()
+        }
+    }
+
+    /** 根据暂停标志应用/解除暂停：断开或重连 SignalR，暂停/恢复轮询 */
+    private fun applyPowerPause() {
+        val paused = screenOffPaused || batterySaverPaused
+        if (paused && !powerPauseApplied) {
+            powerPauseApplied = true
+            signalRClient?.stop()
+            if (isPollingActive) {
+                isPollingActive = false
+                notifySyncStateChanged()
+            }
+            Logger.info(TAG, "SignalR paused (screenOff=$screenOffPaused, battery=$batterySaverPaused)")
+        } else if (!paused && powerPauseApplied) {
+            powerPauseApplied = false
+            if (isRunning) {
+                signalRClient?.start()
+                // 补拉暂停期间错过的内容
+                scope.launch {
+                    try {
+                        Logger.info(TAG, "Catch-up fetch after resume")
+                        fetchRemoteClipboard(force = true)
+                    } catch (e: Exception) {
+                        Logger.warn(TAG, "Catch-up fetch after resume failed: ${e.message}")
+                    }
+                }
+            }
+            Logger.info(TAG, "SignalR resumed")
+        }
+    }
+
     private fun registerClipListener() {
         try {
             val context = appContext ?: return
@@ -312,6 +440,13 @@ class SyncEngine private constructor() {
         isRunning = false
         isConnected = false
         isPollingActive = false
+        // 停止息屏/省电监听与延迟任务
+        screenOffDisconnectJob?.cancel()
+        screenOffDisconnectJob = null
+        powerStateReceiver?.let { receiver ->
+            runCatching { appContext?.unregisterReceiver(receiver) }
+            powerStateReceiver = null
+        }
         // 停止 SignalR 连接
         signalRClient?.stop()
         try {
@@ -450,8 +585,8 @@ class SyncEngine private constructor() {
         val oldActiveIdx = config.activeServerIndex
         config = newConfig
         rebuildApiClient()  // 内部会重建 SignalR 客户端
-        // 配置变更后重启 SignalR 连接（若已创建）
-        if (isRunning) {
+        // 配置变更后重启 SignalR 连接（若已创建且未被息屏/省电暂停）
+        if (isRunning && !powerPauseApplied) {
             signalRClient?.start()
         }
         // 同步日志开关到 Logger
@@ -467,7 +602,7 @@ class SyncEngine private constructor() {
         }
         // 总开关关闭时立即置为未连接并停止轮询
         if (!newConfig.enableAutoSync) {
-            isConnected = false
+            setConnected(false)
             if (isPollingActive) {
                 isPollingActive = false
                 notifySyncStateChanged()
@@ -880,12 +1015,13 @@ class SyncEngine private constructor() {
             client.getClipboard()
         } catch (e: Exception) {
             isFetching = false
-            isConnected = false
+            setConnected(false)
             Logger.warn(TAG, "Remote fetch error", e)
             return false
         }
         if (profile == null) {
             isFetching = false
+            setConnected(false)
             Logger.warn(TAG, "fetchRemoteClipboard: getClipboard returned null")
             return false
         }
@@ -893,11 +1029,12 @@ class SyncEngine private constructor() {
         val hash = profile.hash
         if (hash == null) {
             isFetching = false
+            setConnected(false)
             Logger.warn(TAG, "fetchRemoteClipboard: profile.hash is null, skipping")
             return false
         }
 
-        isConnected = true
+        setConnected(true)
         lastSyncTime = System.currentTimeMillis()
 
         // 网络部分完成，释放 isFetching，补跑排队的手动刷新
@@ -1220,6 +1357,14 @@ class SyncEngine private constructor() {
             context.sendBroadcast(intent)
         } catch (e: Exception) {
             Logger.warn(TAG, "Failed to notify content changed: ${e.message}")
+        }
+    }
+
+    /** 更新连接状态，状态翻转时通知 app 进程 */
+    private fun setConnected(connected: Boolean) {
+        if (isConnected != connected) {
+            isConnected = connected
+            notifySyncStateChanged()
         }
     }
 

@@ -37,6 +37,11 @@ data class AppConfig(
     val stopPollingOnBatterySaver: Boolean = false,
     /** 熄屏时停止远程轮询 */
     val stopPollingOnScreenOff: Boolean = false,
+    /** 息屏后断开 SignalR 推送连接的延迟（秒）。
+     *  仅 SyncClipboard 官方服务器模式生效：
+     *  0 = 不启用（息屏保持连接）；>0 = 息屏 N 秒后断开推送连接并暂停轮询，
+     *  亮屏时自动重连并补拉一次。WebDAV/S3 模式忽略此字段。 */
+    val screenOffDisconnectDelaySec: Int = 0,
     /** 是否启用详细日志（Debug/Info 级别），关闭时仅输出 Warn/Error */
     val enableLogging: Boolean = true,
     /** 日志等级 */
