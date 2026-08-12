@@ -127,13 +127,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 上次 forceFetch 触发时间（连续下拉节流用，ms） */
+    private var lastForceFetchAt = 0L
+
     /** 通过 IPC 从 SyncEngine 获取服务器最新内容（支持所有服务器类型）。
      *  用户下拉刷新调用：await 引擎即时回包（缓存）即停转圈；
      *  回包非空时立即应用（含引擎缓存的最新 profile，即使 fetch/广播链路异常也能刷新预览），
-     *  fetch 完成后由 EVENT_CLIPBOARD_CHANGED 广播（refreshRemoteContentCache）再次刷新。 */
+     *  fetch 完成后由 EVENT_CLIPBOARD_CHANGED 广播（refreshRemoteContentCache）再次刷新。
+     *  连续下拉（间隔 <1.5s）只读缓存不重复触发引擎 force fetch，避免 fetch 排队积压。 */
     fun refreshRemoteContent() {
         _isLoadingRemote.value = true
-        val payload = android.os.Bundle().apply { putBoolean("forceFetch", true) }
+        val now = System.currentTimeMillis()
+        val forceFetch = now - lastForceFetchAt > 1500
+        if (forceFetch) lastForceFetchAt = now
+        val payload = android.os.Bundle().apply { putBoolean("forceFetch", forceFetch) }
         viewModelScope.launch {
             try {
                 val bundle = SyncClipboardBridge.with(app)

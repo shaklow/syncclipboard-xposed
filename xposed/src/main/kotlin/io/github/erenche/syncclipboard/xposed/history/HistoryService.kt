@@ -10,7 +10,6 @@ import io.github.erenche.syncclipboard.common.util.HashUtils
 import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import io.github.erenche.syncclipboard.xposed.history.db.HistoryItemEntity
-import io.github.erenche.syncclipboard.xposed.history.db.HistoryMigrator
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.io.File
@@ -38,11 +37,6 @@ class HistoryService(context: Context) {
 
     private val db = AppDatabase.getInstance(ctx)
     private val dao = db.historyItemDao()
-
-    init {
-        // 一次性 JSON→DB 迁移（旧版升级时执行）
-        HistoryMigrator.migrateIfNeeded(ctx.filesDir, dao)
-    }
 
     fun observeAll(): Flow<List<HistoryItem>> =
         dao.observeAll().map { list -> list.map { it.toModel() } }

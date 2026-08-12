@@ -26,6 +26,7 @@
     <string name="action_save">Save</string>
     <string name="action_delete">Delete</string>
     <string name="action_clear">Clear</string>
+    <string name="action_more">More</string>
     <string name="action_add">Add</string>
     <string name="action_edit">Edit</string>
     <string name="action_back">Back</string>
@@ -205,6 +206,24 @@
     <string name="history_total_count">Total %d items</string>
     <string name="history_selected_count">%d selected</string>
     <string name="history_delete_selected">Delete (%d)</string>
+    <string name="activity_transfer">Transfers</string>
+    <string name="transfer_empty">No downloads in queue</string>
+    <string name="transfer_summary">%1$d active / %2$d total</string>
+    <string name="transfer_waiting">Waiting</string>
+    <string name="transfer_progress">%1$d%%</string>
+    <string name="transfer_completed">Saved</string>
+    <string name="transfer_completed_detail">Saved to gallery / Downloads</string>
+    <string name="transfer_failed">Download failed</string>
+    <string name="transfer_cancelled">Cancelled</string>
+    <string name="transfer_cancel">Cancel</string>
+    <string name="transfer_cancel_all">Cancel all</string>
+    <string name="transfer_clear_finished">Clear</string>
+    <string name="transfer_retry">Retry</string>
+    <string name="transfer_remove">Remove</string>
+    <string name="transfer_download_selected">Download (%d)</string>
+    <string name="transfer_added">%d item(s) added to transfer queue</string>
+    <string name="transfer_added_single">Added to transfer queue</string>
+    <string name="transfer_menu_with_count">Transfers (%1$d)</string>
 
     <!-- About -->
     <string name="about_version">Version %s</string>

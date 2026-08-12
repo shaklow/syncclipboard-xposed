@@ -37,6 +37,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
@@ -436,6 +437,15 @@ class SyncEngine private constructor() {
     }
 
     fun onConfigChanged(newConfig: AppConfig) {
+        // 幂等去重：app 启动/页面进入会多次推送相同配置，直接跳过重建，
+        // 避免 SignalR 客户端被反复 dispose/重建导致连接竞态与重复日志
+        if (newConfig == config) {
+            Logger.enabled = newConfig.enableLogging
+            Logger.logLevel = newConfig.logLevel
+            Logger.maxBufferSize = newConfig.logBufferSize
+            Logger.debug(TAG, "Config unchanged, skipping client rebuild")
+            return
+        }
         val oldServers = config.servers
         val oldActiveIdx = config.activeServerIndex
         config = newConfig
@@ -515,8 +525,13 @@ class SyncEngine private constructor() {
         val hs = historyService ?: return SyncHistoryResult(false, 0, "History service is null")
         // 互斥锁：防止轮询、FORCE_SYNC_HISTORY、剪贴板变化触发并发 syncHistory
         if (force || fullSync) {
-            // 手动触发/全量：等待正在进行的同步完成
-            historySyncMutex.lock()
+            // 手动触发/全量：等待正在进行的同步完成（最多 15s，防止轮询同步卡住时
+            // 手动同步无限等待，导致 app 端刷新指示器一直转圈）
+            val locked = withTimeoutOrNull(15_000L) { historySyncMutex.lock() } != null
+            if (!locked) {
+                Logger.warn(TAG, "syncHistory: timed out waiting for in-progress sync")
+                return SyncHistoryResult(false, 0, "History sync timeout")
+            }
             if (fullSync) {
                 // 全量同步：锁内重置游标
                 lastSyncTime = 0L

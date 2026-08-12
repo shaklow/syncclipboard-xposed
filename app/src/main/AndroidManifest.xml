@@ -24,6 +24,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:description="@string/app_description"
         android:theme="@style/Theme.DayNight">
 
@@ -53,6 +54,10 @@
         <activity
             android:name=".activity.HistoryActivity"
             android:label="@string/activity_history" />
+
+        <activity
+            android:name=".activity.TransferActivity"
+            android:label="@string/activity_transfer" />
 
         <activity
             android:name=".activity.MoreActivity"

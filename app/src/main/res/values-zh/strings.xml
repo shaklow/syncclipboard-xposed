@@ -26,6 +26,7 @@
     <string name="action_save">保存</string>
     <string name="action_delete">删除</string>
     <string name="action_clear">清空</string>
+    <string name="action_more">更多</string>
     <string name="action_add">添加</string>
     <string name="action_edit">编辑</string>
     <string name="action_back">返回</string>
@@ -203,6 +204,24 @@
     <string name="history_total_count">共 %d 条</string>
     <string name="history_selected_count">已选 %d 项</string>
     <string name="history_delete_selected">删除 (%d)</string>
+    <string name="activity_transfer">传输队列</string>
+    <string name="transfer_empty">暂无传输任务</string>
+    <string name="transfer_summary">进行中 %1$d / 共 %2$d</string>
+    <string name="transfer_waiting">等待下载</string>
+    <string name="transfer_progress">%1$d%%</string>
+    <string name="transfer_completed">已保存</string>
+    <string name="transfer_completed_detail">已保存到相册 / 下载目录</string>
+    <string name="transfer_failed">下载失败</string>
+    <string name="transfer_cancelled">已取消</string>
+    <string name="transfer_cancel">取消</string>
+    <string name="transfer_cancel_all">全部取消</string>
+    <string name="transfer_clear_finished">清除</string>
+    <string name="transfer_retry">重试</string>
+    <string name="transfer_remove">移除</string>
+    <string name="transfer_download_selected">下载 (%d)</string>
+    <string name="transfer_added">已加入传输队列 %d 项</string>
+    <string name="transfer_added_single">已加入传输队列</string>
+    <string name="transfer_menu_with_count">传输队列 (%1$d)</string>
 
     <!-- About -->
     <string name="about_version">版本 %s</string>

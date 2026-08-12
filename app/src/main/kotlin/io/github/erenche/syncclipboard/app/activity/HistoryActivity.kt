@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
-import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -46,6 +45,8 @@ import android.graphics.BitmapFactory
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
 import io.github.erenche.syncclipboard.app.net.ServerApi
+import io.github.erenche.syncclipboard.app.transfer.HistoryTransferQueue
+import io.github.erenche.syncclipboard.app.transfer.TransferState
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.BridgeSecurity
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
@@ -57,6 +58,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
@@ -70,8 +72,13 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
+import top.yukonga.miuix.kmp.basic.DropdownImpl
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.ListPopupColumn
+import top.yukonga.miuix.kmp.basic.ListPopupDefaults
+import top.yukonga.miuix.kmp.basic.PopupPositionProvider
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -79,8 +86,10 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.More
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
+import top.yukonga.miuix.kmp.window.WindowListPopup
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -119,6 +128,14 @@ fun HistoryScreen() {
     // 多选模式：选中的记录 id 集合，非空即进入多选模式
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectionMode = selectedIds.isNotEmpty()
+
+    // 传输队列进行中任务数（角标）
+    val transferTasks by HistoryTransferQueue.tasks.collectAsState()
+    val transferActive = transferTasks.count {
+        it.state == TransferState.PENDING || it.state == TransferState.DOWNLOADING
+    }
+    // 右上角菜单
+    var showHistoryMenu by remember { mutableStateOf(false) }
 
     // 服务端分页：totalPages 基于服务端返回的 totalCount
     val totalPages = remember(totalCount, pageSize) {
@@ -188,7 +205,12 @@ fun HistoryScreen() {
                 } else {
                     // 同步在后台进行，等待 EVENT_HISTORY_SYNC_COMPLETED 广播
                     Toast.makeText(context, "正在从服务器同步...", Toast.LENGTH_SHORT).show()
-                    // refreshing 保持 true，由广播接收器收到完成后置 false
+                    // refreshing 保持 true，由广播接收器收到完成后置 false；
+                    // 兜底：广播丢失/同步超时时 15s 后强制停止转圈
+                    scope.launch {
+                        delay(15000)
+                        refreshing = false
+                    }
                 }
             } catch (e: Exception) {
                 refreshing = false
@@ -345,7 +367,31 @@ fun HistoryScreen() {
         actions = {
             if (!loading && items.isNotEmpty()) {
                 if (selectionMode) {
-                    // 多选模式：清空按钮变为“删除选中”
+                    // 多选模式：批量下载（仅图片/文件项计入）+ 删除选中
+                    val downloadCount = items.count {
+                        it.id in selectedIds &&
+                            (it.type == ClipboardContentType.Image || it.type == ClipboardContentType.File) &&
+                            it.hasData
+                    }
+                    if (downloadCount > 0) {
+                        TextButton(
+                            text = stringResource(R.string.transfer_download_selected, downloadCount),
+                            onClick = {
+                                val selected = items.filter { it.id in selectedIds }
+                                HistoryTransferQueue.enqueue(context, selected)
+                                selectedIds = emptySet()
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.transfer_added, selected.size),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            colors = ButtonDefaults.textButtonColorsPrimary(),
+                            minHeight = 36.dp,
+                            minWidth = 0.dp,
+                            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
                     TextButton(
                         text = stringResource(R.string.history_delete_selected, selectedIds.size),
                         onClick = { deleteSelected() },
@@ -355,22 +401,60 @@ fun HistoryScreen() {
                         insideMargin = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     )
                 } else {
-                    TextButton(
-                        text = stringResource(R.string.action_clear),
-                        onClick = {
-                            scope.launch {
-                                SyncClipboardBridge.with(context)
-                                    .to("com.android.systemui")
-                                    .key(BridgeKeys.CLEAR_HISTORY)
-                                    .send()
-                                items = emptyList()
-                                Toast.makeText(context, R.string.history_cleared, Toast.LENGTH_SHORT).show()
-                            }
+                    // 右上角菜单：传输队列 + 清空历史（与主界面重启菜单同款样式）
+                    IconButton(
+                        onClick = { showHistoryMenu = true },
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.More,
+                            contentDescription = stringResource(R.string.action_more),
+                            tint = MiuixTheme.colorScheme.onSurface
+                        )
+                    }
+                    val menuLabels = listOf(
+                        if (transferActive > 0) {
+                            stringResource(R.string.transfer_menu_with_count, transferActive)
+                        } else {
+                            stringResource(R.string.activity_transfer)
                         },
-                        colors = ButtonDefaults.textButtonColorsPrimary(),
-                        minHeight = 36.dp,
-                        minWidth = 0.dp,
-                        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        stringResource(R.string.action_clear)
+                    )
+                    WindowListPopup(
+                        show = showHistoryMenu,
+                        popupPositionProvider = ListPopupDefaults.ContextMenuPositionProvider,
+                        alignment = PopupPositionProvider.Align.TopEnd,
+                        onDismissRequest = { showHistoryMenu = false },
+                        content = {
+                            ListPopupColumn {
+                                menuLabels.forEachIndexed { index, label ->
+                                    DropdownImpl(
+                                        text = label,
+                                        optionSize = menuLabels.size,
+                                        isSelected = false,
+                                        index = index,
+                                        onSelectedIndexChange = { selectedIdx ->
+                                            showHistoryMenu = false
+                                            when (selectedIdx) {
+                                                0 -> context.startActivity(
+                                                    Intent(context, TransferActivity::class.java)
+                                                )
+                                                1 -> {
+                                                    scope.launch {
+                                                        SyncClipboardBridge.with(context)
+                                                            .to("com.android.systemui")
+                                                            .key(BridgeKeys.CLEAR_HISTORY)
+                                                            .send()
+                                                        items = emptyList()
+                                                        Toast.makeText(context, R.string.history_cleared, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -862,7 +946,10 @@ private fun HistoryItemRow(
                     ) {
                         TextButton(
                             text = stringResource(R.string.action_download),
-                            onClick = { scope.launch { downloadHistoryFile(context, item) } },
+                            onClick = {
+                                HistoryTransferQueue.enqueue(context, listOf(item))
+                                Toast.makeText(context, R.string.transfer_added_single, Toast.LENGTH_SHORT).show()
+                            },
                             colors = ButtonDefaults.textButtonColorsPrimary(),
                             minHeight = 32.dp,
                             minWidth = 0.dp,
@@ -902,58 +989,6 @@ private fun HistoryItemRow(
                 }
             }
         }
-    }
-}
-
-// ─── 下载历史文件到本地 ────────────────────────────────────────
-
-private suspend fun downloadHistoryFile(context: Context, item: HistoryItem) {
-    try {
-        val config = Prefs.loadConfig(context)
-        val server = config.servers.getOrNull(config.activeServerIndex)
-        if (server == null) {
-            Toast.makeText(context, "未配置服务器", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val api = ServerApi(server)
-        val fileName = item.dataName ?: "file_${System.currentTimeMillis()}"
-        val destFile = File(context.cacheDir, "dl_$fileName")
-        val downloaded = withContext(Dispatchers.IO) {
-            api.downloadHistoryData(item.type, item.profileHash, destFile)
-        }
-        if (downloaded == null) {
-            Toast.makeText(context, "下载失败", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val resolver = context.contentResolver
-        if (item.type == ClipboardContentType.Image) {
-            val values = android.content.ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/*")
-            }
-            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            uri?.let {
-                resolver.openOutputStream(it)?.use { out ->
-                    downloaded.inputStream().use { input -> input.copyTo(out) }
-                }
-                Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            val values = android.content.ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                put(MediaStore.Downloads.MIME_TYPE, "*/*")
-            }
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            uri?.let {
-                resolver.openOutputStream(it)?.use { out ->
-                    downloaded.inputStream().use { input -> input.copyTo(out) }
-                }
-                Toast.makeText(context, "已保存到下载", Toast.LENGTH_SHORT).show()
-            }
-        }
-        downloaded.delete()
-    } catch (e: Exception) {
-        Toast.makeText(context, "下载失败: ${e.message}", Toast.LENGTH_SHORT).show()
     }
 }
 

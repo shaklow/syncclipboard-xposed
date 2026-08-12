@@ -219,8 +219,17 @@ class ServerApi(private val server: ServerConfig) {
      * 下载历史记录的数据文件到指定路径（GET /api/history/{profileId}/data）。
      * profileId 格式为 "Type-Hash"（如 File-6C12C7AC...、Image-0BDA056B...）。
      * 用于历史记录中文件/图片的下载与预览。
+     *
+     * @param onProgress 进度回调（0f..1f），content-length 未知时为 null 或停止回调
+     * @param isCancelled 取消检查（在读取循环中轮询，返回 true 时中止下载）
      */
-    fun downloadHistoryData(type: ClipboardContentType, hash: String, destFile: File): File? {
+    fun downloadHistoryData(
+        type: ClipboardContentType,
+        hash: String,
+        destFile: File,
+        onProgress: ((Float) -> Unit)? = null,
+        isCancelled: () -> Boolean = { false }
+    ): File? {
         return try {
             // profileId 格式："{Type}-{rawHash}"，rawHash 必须剥离类型前缀
             // 服务器存的 hash 可能是 "text-xxx"（带前缀）或 "xxx"（无前缀），需统一剥离
@@ -230,9 +239,24 @@ class ServerApi(private val server: ServerConfig) {
             conn.requestMethod = "GET"
             if (conn.responseCode in 200..299) {
                 destFile.parentFile?.mkdirs()
+                val total = conn.contentLength.toLong().takeIf { it > 0 }
+                var copied = 0L
+                val buffer = ByteArray(64 * 1024)
                 conn.inputStream.use { input ->
-                    destFile.outputStream().use { output -> input.copyTo(output) }
+                    destFile.outputStream().use { output ->
+                        while (true) {
+                            if (isCancelled()) throw java.io.IOException("Download cancelled")
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            copied += read
+                            if (total != null && onProgress != null) {
+                                onProgress((copied.toFloat() / total).coerceIn(0f, 1f))
+                            }
+                        }
+                    }
                 }
+                if (total != null && onProgress != null) onProgress(1f)
                 destFile
             } else {
                 Logger.error(TAG, "downloadHistoryData failed: HTTP ${conn.responseCode} for profileId=$profileId")

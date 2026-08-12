@@ -68,6 +68,8 @@ class SignalRClient(
         private const val INITIAL_RECONNECT_DELAY_MS = 2_000L
         /** 重连最大间隔 */
         private const val MAX_RECONNECT_DELAY_MS = 5 * 60_000L
+        /** 连接保持超过该时长视为"成功连接"，断开重连时重置退避间隔 */
+        private const val CONNECTED_KEEP_MS = 20_000L
     }
 
     /** 推送回调：远程剪贴板变化 */
@@ -84,6 +86,9 @@ class SignalRClient(
     private var connectionJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var isStopped = false
+    /** 带 id 的 WebSocket 路径是否失败过：失败一次后优先使用直连，避免每次重连都多一次失败往返 */
+    @Volatile
+    private var preferDirect = false
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -157,6 +162,7 @@ class SignalRClient(
         connectionJob = scope.launch {
             var retryDelay = INITIAL_RECONNECT_DELAY_MS
             while (isActive && !isStopped) {
+                val attemptStart = System.currentTimeMillis()
                 try {
                     connectAndListen()
                     // 正常断开（不应发生，除非 stop()）：退出循环
@@ -170,6 +176,11 @@ class SignalRClient(
                 // 连接断开，更新状态
                 updateConnectionState(false)
                 if (isStopped) break
+                // 本次连接保持超过 CONNECTED_KEEP_MS 视为成功连接：重连退避重置，
+                // 避免指数退避只增不减（服务器偶发闪断后重连越来越慢）
+                if (System.currentTimeMillis() - attemptStart > CONNECTED_KEEP_MS) {
+                    retryDelay = INITIAL_RECONNECT_DELAY_MS
+                }
                 // 指数退避重连
                 Log.w(TAG, "Reconnecting in ${retryDelay}ms...")
                 Logger.info(TAG, "Reconnecting in ${retryDelay}ms...")
@@ -198,37 +209,42 @@ class SignalRClient(
     }
 
     /** 建立连接并监听消息。
-     *  先尝试 negotiate + WebSocket（标准流程），失败时降级为直连 WebSocket（兼容部分反代）。 */
+     *  先尝试 negotiate + WebSocket（标准流程），失败时降级为直连 WebSocket（兼容部分反代）。
+     *  带 id 路径失败过一次后（[preferDirect]）后续连接直接走直连，减少无谓失败与重连延迟。 */
     private suspend fun connectAndListen() {
         val authHeader = buildAuthHeader()
-        // negotiate 阶段（失败时降级为直连，兼容默认配置的服务器）
-        val connectionId = negotiate()
-        val urlWithId = buildWebSocketUrl(connectionId)
-        Log.w(TAG, "Connecting to $urlWithId")
-        Logger.info(TAG, "Connecting to $urlWithId")
+        if (!preferDirect) {
+            // negotiate 阶段（失败时降级为直连，兼容默认配置的服务器）
+            val connectionId = negotiate()
+            val urlWithId = buildWebSocketUrl(connectionId)
+            Log.w(TAG, "Connecting to $urlWithId")
+            Logger.info(TAG, "Connecting to $urlWithId")
 
-        try {
-            httpClient.webSocket(
-                urlString = urlWithId,
-                request = {
-                    if (authHeader != null) {
-                        header("Authorization", authHeader)
+            try {
+                httpClient.webSocket(
+                    urlString = urlWithId,
+                    request = {
+                        if (authHeader != null) {
+                            header("Authorization", authHeader)
+                        }
+                        header("User-Agent", "SyncClipboard-Android")
                     }
-                    header("User-Agent", "SyncClipboard-Android")
+                ) {
+                    onConnected(this)
+                    listenForMessages(this)
                 }
-            ) {
-                onConnected(this)
-                listenForMessages(this)
+                return
+            } catch (e: Exception) {
+                // 带 connectionId 的 WebSocket 升级失败（如反代返回 502/404），
+                // 降级为不带 id 的直连模式（部分服务器/反代不支持 id 参数路由）
+                Log.w(TAG, "WebSocket with connectionId failed: ${e.message}, falling back to direct connect")
+                Logger.warn(TAG, "WebSocket with id failed, falling back to direct: ${e.message}")
+                // 记住该路径不通，后续直连优先
+                preferDirect = true
             }
-            return
-        } catch (e: Exception) {
-            // 带 connectionId 的 WebSocket 升级失败（如反代返回 502/404），
-            // 降级为不带 id 的直连模式（部分服务器/反代不支持 id 参数路由）
-            Log.w(TAG, "WebSocket with connectionId failed: ${e.message}, falling back to direct connect")
-            Logger.warn(TAG, "WebSocket with id failed, falling back to direct: ${e.message}")
         }
 
-        // 降级：不带 connectionId 直连
+        // 直连：不带 connectionId（negotiate 失败或带 id 路径已确认不通）
         val urlDirect = buildWebSocketUrl(null)
         Log.w(TAG, "Fallback connecting to $urlDirect")
         Logger.info(TAG, "Fallback connecting to $urlDirect")
