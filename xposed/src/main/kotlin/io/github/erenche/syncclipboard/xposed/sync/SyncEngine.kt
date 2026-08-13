@@ -218,43 +218,58 @@ class SyncEngine private constructor() {
                         !isScreenOffBlocked() &&
                         consecutiveFailures < maxConsecutiveFailures
                 if (shouldPoll) {
-                    val success = try {
-                        fetchRemoteClipboard()
-                    } catch (e: Exception) {
-                        Logger.error(TAG, "Remote fetch error", e)
-                        false
-                    }
-                    if (success) {
-                        consecutiveFailures = 0
-                        if (!isPollingActive) {
-                            isPollingActive = true
-                            Logger.info(TAG, "Polling active")
+                    // SyncClipboard 官方服务器模式 + SignalR 推送开启时，完全依赖推送，不轮询 fetch。
+                    // 与 syncclipboard-mobile 行为一致：SignalR 负责实时同步，断连期间不同步，
+                    // 重连成功后由 onConnectionStateChanged 触发补拉。
+                    val skipFetch = isSignalRDisconnectEnabled()
+                    if (skipFetch) {
+                        // isPollingActive 跟随 SignalR 连接状态，让 UI 反映断连
+                        val expectedActive = isSignalRConnected
+                        if (isPollingActive != expectedActive) {
+                            isPollingActive = expectedActive
+                            Logger.info(TAG, "Polling active = $expectedActive (SignalR mode, no fetch)")
                             notifySyncStateChanged()
                         }
-                        // 历史增量同步：每轮轮询后尝试增量拉取（tryLock 跳过并发）
-                        // 与 Win 端一致：后台定期增量同步，仅拉 modifiedAfter 之后的记录
-                        // 独立协程执行，避免首次全量同步（游标为 0 时）阻塞剪贴板轮询
-                        // 仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 API
-                        val server = config.servers.getOrNull(config.activeServerIndex)
-                        if (config.enableHistorySync && server?.type == ServerType.syncclipboard) {
-                            scope.launch {
-                                try {
-                                    syncHistory(force = false)
-                                } catch (e: Exception) {
-                                    Logger.warn(TAG, "Polling history sync error: ${e.message}")
+                        consecutiveFailures = 0
+                    } else {
+                        val success = try {
+                            fetchRemoteClipboard()
+                        } catch (e: Exception) {
+                            Logger.error(TAG, "Remote fetch error", e)
+                            false
+                        }
+                        if (success) {
+                            consecutiveFailures = 0
+                            if (!isPollingActive) {
+                                isPollingActive = true
+                                Logger.info(TAG, "Polling active")
+                                notifySyncStateChanged()
+                            }
+                            // 历史增量同步：每轮轮询后尝试增量拉取（tryLock 跳过并发）
+                            // 与 Win 端一致：后台定期增量同步，仅拉 modifiedAfter 之后的记录
+                            // 独立协程执行，避免首次全量同步（游标为 0 时）阻塞剪贴板轮询
+                            // 仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 API
+                            val server = config.servers.getOrNull(config.activeServerIndex)
+                            if (config.enableHistorySync && server?.type == ServerType.syncclipboard) {
+                                scope.launch {
+                                    try {
+                                        syncHistory(force = false)
+                                    } catch (e: Exception) {
+                                        Logger.warn(TAG, "Polling history sync error: ${e.message}")
+                                    }
                                 }
                             }
-                        }
-                    } else {
-                        consecutiveFailures++
-                        // 失败即停止活动标记：让状态即时反映真实连通性，
-                        // 退避重试期间保持 false，成功时再恢复
-                        if (isPollingActive) {
-                            isPollingActive = false
-                            Logger.warn(TAG, "Polling paused: $consecutiveFailures consecutive failures")
-                            notifySyncStateChanged()
-                        } else if (consecutiveFailures <= retryBackoffMs.size) {
-                            Logger.info(TAG, "Remote fetch failed ($consecutiveFailures/${retryBackoffMs.size+1}), retry in ${retryBackoffMs[consecutiveFailures-1]}ms")
+                        } else {
+                            consecutiveFailures++
+                            // 失败即停止活动标记：让状态即时反映真实连通性，
+                            // 退避重试期间保持 false，成功时再恢复
+                            if (isPollingActive) {
+                                isPollingActive = false
+                                Logger.warn(TAG, "Polling paused: $consecutiveFailures consecutive failures")
+                                notifySyncStateChanged()
+                            } else if (consecutiveFailures <= retryBackoffMs.size) {
+                                Logger.info(TAG, "Remote fetch failed ($consecutiveFailures/${retryBackoffMs.size+1}), retry in ${retryBackoffMs[consecutiveFailures-1]}ms")
+                            }
                         }
                     }
                     // 历史同步：轮询中自动增量同步（独立协程），手动刷新走 FORCE_SYNC_HISTORY
@@ -267,11 +282,13 @@ class SyncEngine private constructor() {
                         setConnected(false)
                     }
                 }
-                // 失败时按退避间隔重试；正常时使用配置的轮询间隔
-                val delayMs = if (consecutiveFailures in 1..retryBackoffMs.size) {
-                    retryBackoffMs[consecutiveFailures - 1]
-                } else {
-                    pollingIntervalMs()
+                // 失败时按退避间隔重试；SignalR 模式 60s 状态检查；正常时使用配置间隔
+                val delayMs = when {
+                    consecutiveFailures in 1..retryBackoffMs.size ->
+                        retryBackoffMs[consecutiveFailures - 1]
+                    isSignalRDisconnectEnabled() ->
+                        SignalRClient.PUSH_ACTIVE_POLLING_MS
+                    else -> pollingIntervalMs()
                 }
                 delay(delayMs)
             }
@@ -281,12 +298,9 @@ class SyncEngine private constructor() {
     }
 
     /** 轮询间隔（毫秒）。
-     *  SignalR 推送连接成功时降级为 60s 兜底（防止推送断开时漏数据）；
-     *  断开时恢复用户配置的间隔。 */
+     *  SignalR 推送连接成功时，轮询 fetch 被跳过（由 start() 循环判断），
+     *  但保留 60s 状态检查循环；断开时恢复用户配置的间隔做正常 fetch。 */
     private fun pollingIntervalMs(): Long {
-        if (isSignalRConnected) {
-            return SignalRClient.PUSH_ACTIVE_POLLING_MS
-        }
         val sec = config.pollingIntervalSec
         return if (sec > 0) sec * 1000L else config.remotePollingInterval
     }
@@ -1471,6 +1485,17 @@ class SyncEngine private constructor() {
             client.onConnectionStateChanged = { connected ->
                 isSignalRConnected = connected
                 Logger.info(TAG, "SignalR connection: ${if (connected) "connected" else "disconnected"}")
+                if (connected) {
+                    // 重连成功后补拉断连期间的数据（与 syncclipboard-mobile 行为一致）
+                    scope.launch {
+                        try {
+                            Logger.info(TAG, "SignalR reconnected, triggering catch-up fetch")
+                            fetchRemoteClipboard(force = true)
+                        } catch (e: Exception) {
+                            Logger.warn(TAG, "Catch-up fetch on SignalR reconnect failed: ${e.message}")
+                        }
+                    }
+                }
                 notifySyncStateChanged()
             }
             signalRClient = client
