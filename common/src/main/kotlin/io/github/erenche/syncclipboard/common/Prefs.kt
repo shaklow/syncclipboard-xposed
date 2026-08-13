@@ -19,6 +19,8 @@ object Prefs {
     private const val KEY_SERVERS = "servers"
     private const val KEY_ACTIVE_SERVER = "active_server_index"
     private const val KEY_HISTORY_LAST_SYNC_TIME = "history_last_sync_time"
+    private const val KEY_LAST_REMOTE_HASH = "last_remote_hash"
+    private const val KEY_LAST_REMOTE_FILE_PATH = "last_remote_file_path"
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -107,5 +109,34 @@ object Prefs {
      */
     fun resetHistoryLastSyncTime(context: Context) {
         getPrefs(context).edit().putLong(KEY_HISTORY_LAST_SYNC_TIME, 0L).apply()
+    }
+
+    /**
+     * 加载最后远程内容 hash（持久化跨 SystemUI 重启，避免重启后
+     * 把未变化的服务器内容误判为"新内容"，导致重复下载与重复历史）
+     */
+    fun loadLastRemoteHash(context: Context): String? {
+        return getPrefs(context).getString(KEY_LAST_REMOTE_HASH, null)
+    }
+
+    /**
+     * 保存最后远程内容 hash
+     */
+    fun saveLastRemoteHash(context: Context, hash: String?) {
+        getPrefs(context).edit().putString(KEY_LAST_REMOTE_HASH, hash).apply()
+    }
+
+    /**
+     * 加载最后下载的文件路径（SystemUI 重启后用于判断文件是否已存在）
+     */
+    fun loadLastRemoteFilePath(context: Context): String? {
+        return getPrefs(context).getString(KEY_LAST_REMOTE_FILE_PATH, null)
+    }
+
+    /**
+     * 保存最后下载的文件路径
+     */
+    fun saveLastRemoteFilePath(context: Context, path: String?) {
+        getPrefs(context).edit().putString(KEY_LAST_REMOTE_FILE_PATH, path).apply()
     }
 }

@@ -123,7 +123,7 @@ class SyncEngine private constructor() {
     var isPollingActive: Boolean = false
         private set
 
-    // ─── 息屏/省电断开 SignalR（仅 SyncClipboard 官方服务器模式）───
+    // ─── 息屏/省电/移动网络断开（SyncClipboard 模式断开 SignalR，WebDAV/S3 模式停止轮询）───
     private var powerStateReceiver: BroadcastReceiver? = null
     private var screenOffDisconnectJob: Job? = null
     /** 息屏延迟断开已触发 */
@@ -132,9 +132,14 @@ class SyncEngine private constructor() {
     /** 省电模式断开已触发 */
     @Volatile
     private var batterySaverPaused = false
+    /** 移动网络下断开已触发（WiFi 不可用且配置了 disconnectOnMobileData） */
+    @Volatile
+    private var mobileDataPaused = false
     /** 是否已应用暂停（断开 SignalR + 暂停轮询） */
     @Volatile
     private var powerPauseApplied = false
+    /** 网络状态监听回调 */
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
 
     @Volatile
     var lastSyncTime: Long = 0
@@ -164,6 +169,9 @@ class SyncEngine private constructor() {
     /** 最大连续失败次数 = 原始失败 + 4 次退避重试全失败 */
     private val maxConsecutiveFailures: Int = retryBackoffMs.size + 1
 
+    /** 上传重试队列单条最大重试次数，超限丢弃 */
+    private val MAX_UPLOAD_RETRY = 5
+
     fun initialize(context: Context) {
         if (appContext != null) {
             Logger.info(TAG, "Already initialized, skipping")
@@ -177,6 +185,9 @@ class SyncEngine private constructor() {
         config = Prefs.loadConfig(context)
         // 加载持久化的历史同步游标（增量同步用）
         lastSyncTime = Prefs.loadHistoryLastSyncTime(context)
+        // 加载持久化的远程内容状态（SystemUI 重启后避免重复下载/重复历史）
+        lastRemoteHash = Prefs.loadLastRemoteHash(context)
+        lastRemoteFilePath = Prefs.loadLastRemoteFilePath(context)
         Logger.enabled = config.enableLogging
         Logger.logLevel = config.logLevel
         Logger.maxBufferSize = config.logBufferSize
@@ -205,6 +216,9 @@ class SyncEngine private constructor() {
         // 唯一剪贴板变化源：OnPrimaryClipChangedListener（系统级，捕获全局变化）
         // 不使用 ClipboardHooker / 本地轮询，避免多路径竞态导致重复上传
         registerClipListener()
+
+        // 注册网络监听（移动网络下断开 SignalR / 停止轮询）
+        registerNetworkMonitor()
 
         // 启动 SignalR 推送连接（仅官方服务器模式生效）
         signalRClient?.start()
@@ -238,13 +252,15 @@ class SyncEngine private constructor() {
                             Logger.error(TAG, "Remote fetch error", e)
                             false
                         }
-                        if (success) {
-                            consecutiveFailures = 0
-                            if (!isPollingActive) {
-                                isPollingActive = true
-                                Logger.info(TAG, "Polling active")
-                                notifySyncStateChanged()
-                            }
+                    if (success) {
+                        consecutiveFailures = 0
+                        if (!isPollingActive) {
+                            isPollingActive = true
+                            Logger.info(TAG, "Polling active")
+                            notifySyncStateChanged()
+                        }
+                        // 网络可达：顺带重放上传失败队列
+                        appContext?.let { flushUploadQueue(it) }
                             // 历史增量同步：每轮轮询后尝试增量拉取（tryLock 跳过并发）
                             // 与 Win 端一致：后台定期增量同步，仅拉 modifiedAfter 之后的记录
                             // 独立协程执行，避免首次全量同步（游标为 0 时）阻塞剪贴板轮询
@@ -400,9 +416,10 @@ class SyncEngine private constructor() {
         }
     }
 
-    /** 根据暂停标志应用/解除暂停：断开或重连 SignalR，暂停/恢复轮询 */
+    /** 根据暂停标志应用/解除暂停：断开或重连 SignalR，暂停/恢复轮询。
+     *  适用于息屏/省电/移动网络三种触发条件。 */
     private fun applyPowerPause() {
-        val paused = screenOffPaused || batterySaverPaused
+        val paused = screenOffPaused || batterySaverPaused || mobileDataPaused
         if (paused && !powerPauseApplied) {
             powerPauseApplied = true
             signalRClient?.stop()
@@ -410,7 +427,7 @@ class SyncEngine private constructor() {
                 isPollingActive = false
                 notifySyncStateChanged()
             }
-            Logger.info(TAG, "SignalR paused (screenOff=$screenOffPaused, battery=$batterySaverPaused)")
+            Logger.info(TAG, "Paused (screenOff=$screenOffPaused, battery=$batterySaverPaused, mobile=$mobileDataPaused)")
         } else if (!paused && powerPauseApplied) {
             powerPauseApplied = false
             if (isRunning) {
@@ -425,8 +442,61 @@ class SyncEngine private constructor() {
                     }
                 }
             }
-            Logger.info(TAG, "SignalR resumed")
+            Logger.info(TAG, "Resumed")
         }
+    }
+
+    // ─── 移动网络监听 ───────────────────────────────────────────
+
+    /** 注册默认网络监听，WiFi 不可用且配置开启时触发暂停 */
+    private fun registerNetworkMonitor() {
+        try {
+            val ctx = appContext ?: return
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? android.net.ConnectivityManager ?: return
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    handleNetworkChange(cm)
+                }
+                override fun onLost(network: android.net.Network) {
+                    handleNetworkChange(cm)
+                }
+                override fun onCapabilitiesChanged(
+                    network: android.net.Network,
+                    caps: android.net.NetworkCapabilities
+                ) {
+                    handleNetworkChange(cm)
+                }
+            }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+            handleNetworkChange(cm) // 初始化当前状态
+            Logger.info(TAG, "Network monitor registered")
+        } catch (e: Exception) {
+            Logger.warn(TAG, "Failed to register network monitor: ${e.message}")
+        }
+    }
+
+    /** 判断当前活动网络是否为 WiFi，更新移动网络暂停状态 */
+    private fun handleNetworkChange(cm: android.net.ConnectivityManager) {
+        val isWifi = cm.activeNetwork?.let { network ->
+            cm.getNetworkCapabilities(network)
+                ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+        } ?: false
+        val shouldPause = config.disconnectOnMobileData && !isWifi
+        if (shouldPause != mobileDataPaused) {
+            mobileDataPaused = shouldPause
+            Logger.info(TAG, "Network changed: isWifi=$isWifi, mobileDataPaused=$mobileDataPaused")
+            applyPowerPause()
+        }
+    }
+
+    /** 配置变更后重新评估移动网络暂停状态 */
+    private fun reevaluateMobileDataState() {
+        val ctx = appContext ?: return
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? android.net.ConnectivityManager ?: return
+        handleNetworkChange(cm)
     }
 
     private fun registerClipListener() {
@@ -460,6 +530,15 @@ class SyncEngine private constructor() {
         powerStateReceiver?.let { receiver ->
             runCatching { appContext?.unregisterReceiver(receiver) }
             powerStateReceiver = null
+        }
+        // 停止网络监听
+        networkCallback?.let { cb ->
+            runCatching {
+                val cm = appContext?.getSystemService(Context.CONNECTIVITY_SERVICE)
+                    as? android.net.ConnectivityManager
+                cm?.unregisterNetworkCallback(cb)
+            }
+            networkCallback = null
         }
         // 停止 SignalR 连接
         signalRClient?.stop()
@@ -577,6 +656,14 @@ class SyncEngine private constructor() {
                 notifyContentChanged()
                 if (config.enableAutoSync && config.enableBackgroundUpload) {
                     val uploaded = uploadContent(content)
+                    if (!uploaded) {
+                        // 上传失败：入队重试队列，网络恢复后自动重放
+                        val ctx = appContext
+                        if (ctx != null) {
+                            UploadQueue.enqueue(ctx, content)
+                            flushUploadQueue(ctx)
+                        }
+                    }
                     // 历史同步改为手动触发，上传后不再自动 syncHistory
                 }
             } catch (e: Exception) {
@@ -622,6 +709,8 @@ class SyncEngine private constructor() {
                 notifySyncStateChanged()
             }
         }
+        // 配置变更后重新评估移动网络暂停状态（用户可能刚开启/关闭了移动网络断开）
+        reevaluateMobileDataState()
         Logger.info(TAG, "Config changed, client rebuilt, logging=${newConfig.enableLogging}, autoSync=${newConfig.enableAutoSync}, pollingInterval=${newConfig.pollingIntervalSec}s, signalRPush=${newConfig.enableSignalRPush}")
     }
 
@@ -1078,6 +1167,7 @@ class SyncEngine private constructor() {
             // 内容变化：先广播 profile（app 立即刷新并自行下载预览），
             // 文件下载/历史记录/自动保存由 notifyAndApplyAsync 后台继续，避免大文件阻塞 UI
             lastRemoteHash = hash
+            appContext?.let { Prefs.saveLastRemoteHash(it, hash) }
             Logger.info(TAG, "Remote clipboard changed: ${profile.text.take(50)}...")
 
             if (force || config.enableBackgroundDownload) {
@@ -1089,11 +1179,22 @@ class SyncEngine private constructor() {
             }
         } else {
             // 内容未变化：通知 app 停止转圈
-            // 补救：force 且内容有数据但 lastRemoteFilePath 为空（之前下载缺失/失败）时重新下载
-            if (force && profile.hasData && lastRemoteFilePath.isNullOrBlank() &&
+            // 补救：内容有数据但 lastRemoteFilePath 为空（重启/下载缺失/失败）时
+            // 先尝试按路径规则重建（文件可能仍在），重建不了则重新下载
+            if (profile.hasData && lastRemoteFilePath.isNullOrBlank() &&
                 (profile.type == ClipboardContentType.Image || profile.type == ClipboardContentType.File)) {
-                Logger.info(TAG, "Force fetch: content unchanged but file missing, re-downloading")
-                notifyAndApplyAsync(profile)
+                val restored = restoreRemoteFilePath(profile)
+                if (restored) {
+                    notifyContentChanged()
+                } else if (force || config.enableBackgroundDownload) {
+                    Logger.info(TAG, "Fetch: content unchanged but file missing, re-downloading")
+                    notifyAndApplyAsync(profile)
+                } else {
+                    if (lastRemoteProfile == null) {
+                        lastRemoteProfile = profile
+                    }
+                    notifyContentChanged()
+                }
             } else {
                 if (lastRemoteProfile == null) {
                     lastRemoteProfile = profile
@@ -1102,6 +1203,22 @@ class SyncEngine private constructor() {
             }
         }
         return true
+    }
+
+    /** 尝试按路径规则重建已下载文件的路径（文件可能仍在磁盘，重启后路径丢失）。
+     *  返回是否成功恢复。 */
+    private fun restoreRemoteFilePath(profile: ProfileDto): Boolean {
+        val name = profile.dataName ?: return false
+        val ctx = appContext ?: return false
+        val path = "${ctx.filesDir}/downloads/$name"
+        val file = java.io.File(path)
+        if (file.exists() && file.length() > 0) {
+            lastRemoteFilePath = path
+            Prefs.saveLastRemoteFilePath(ctx, path)
+            Logger.info(TAG, "Remote file path restored: $path (size=${file.length()})")
+            return true
+        }
+        return false
     }
 
     /** 先广播 profile 供 app 立即刷新（app 自行下载预览文件），
@@ -1114,6 +1231,45 @@ class SyncEngine private constructor() {
                 downloadAndApplyContent(profile)
             } catch (e: Exception) {
                 Logger.error(TAG, "Background download and apply failed", e)
+            }
+        }
+    }
+
+    /** 上传失败重试队列是否正在重放（防重入） */
+    @Volatile
+    private var uploadQueueFlushing = false
+
+    /**
+     * 重放上传重试队列：按序重试，成功即出队，失败保留（下次再试）。
+     * 触发时机：新上传成功、轮询 fetch 成功（网络可用信号）、SignalR 重连成功。
+     */
+    private fun flushUploadQueue(context: Context) {
+        if (uploadQueueFlushing) return
+        if (UploadQueue.isEmpty(context)) return
+        uploadQueueFlushing = true
+        scope.launch {
+            try {
+                while (isActive) {
+                    val item = UploadQueue.peek(context) ?: break
+                    val key = UploadQueue.contentKey(item.content)
+                    val ok = uploadContent(item.content)
+                    if (ok) {
+                        UploadQueue.remove(context, key)
+                    } else {
+                        // 单条失败：记录重试次数，超过上限丢弃（防止死循环堆积）
+                        UploadQueue.markRetry(context, key)
+                        Logger.warn(TAG, "Upload queue flush failed (retry=${item.retryCount + 1}): ${item.content.text.take(30)}")
+                        if (item.retryCount >= MAX_UPLOAD_RETRY) {
+                            Logger.warn(TAG, "Upload queue: dropping item after $MAX_UPLOAD_RETRY retries")
+                            UploadQueue.remove(context, key)
+                        }
+                        break
+                    }
+                }
+            } catch (e: Exception) {
+                Logger.warn(TAG, "Upload queue flush error: ${e.message}")
+            } finally {
+                uploadQueueFlushing = false
             }
         }
     }
@@ -1146,6 +1302,9 @@ class SyncEngine private constructor() {
             // 设置 lastRemoteHash，防止轮询循环立即下载刚上传的内容
             // 使用 uploadContent（已将 content:// 转为本地路径）保证文件 hash 可读
             lastRemoteHash = HashUtils.computeContentHash(uploadContent)
+            appContext?.let { Prefs.saveLastRemoteHash(it, lastRemoteHash) }
+            // 上传成功说明网络可用：顺带重放失败队列
+            appContext?.let { flushUploadQueue(it) }
             // 更新缓存，使 app 端能立即显示刚上传的内容
             lastRemoteProfile = ProfileDto(
                 type = uploadContent.type,
@@ -1219,6 +1378,7 @@ class SyncEngine private constructor() {
             val localHash = HashUtils.sha256(profile.text)
             lastLocalHash = localHash
             lastRemoteHash = profile.hash ?: localHash
+            appContext?.let { Prefs.saveLastRemoteHash(it, lastRemoteHash) }
 
             // 仅纯文本（type=Text 且无文件数据且无文件名）才写入剪贴板。
             // 图片/文件类型不写入（避免输入法只读取到文件名），
@@ -1255,6 +1415,7 @@ class SyncEngine private constructor() {
             historyService?.addRemoteContent(historyContent, downloadedFilePath)
             Logger.debug(TAG, "downloadAndApplyContent: history recorded")
             lastRemoteFilePath = downloadedFilePath
+            appContext?.let { Prefs.saveLastRemoteFilePath(it, downloadedFilePath) }
             // 缓存一致性：profile 与 filePath 同时更新后再通知 UI
             lastRemoteProfile = profile
             notifyContentChanged()
@@ -1495,6 +1656,8 @@ class SyncEngine private constructor() {
                             Logger.warn(TAG, "Catch-up fetch on SignalR reconnect failed: ${e.message}")
                         }
                     }
+                    // 网络可达：顺带重放上传失败队列
+                    appContext?.let { flushUploadQueue(it) }
                 }
                 notifySyncStateChanged()
             }

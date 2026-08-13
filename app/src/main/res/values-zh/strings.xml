@@ -103,23 +103,27 @@
 
     <!-- Sync Settings -->
     <string name="setting_auto_sync">自动同步</string>
-    <string name="setting_auto_sync_summary">在后台自动同步剪贴板</string>
+    <string name="setting_auto_sync_summary">后台自动同步剪贴板</string>
     <string name="setting_background_upload">后台上传</string>
-    <string name="setting_background_upload_summary">空闲时自动上传剪贴板变更</string>
+    <string name="setting_background_upload_summary">自动上传剪贴板变更</string>
     <string name="setting_background_download">后台下载</string>
-    <string name="setting_background_download_summary">自动下载远程剪贴板变更</string>
+    <string name="setting_background_download_summary">自动下载远程变更</string>
     <string name="setting_polling_section">轮询设置</string>
     <string name="setting_stop_polling_battery_saver">省电模式停止轮询</string>
-    <string name="setting_stop_polling_battery_saver_summary">省电模式下暂停远程轮询</string>
+    <string name="setting_stop_polling_battery_saver_summary">省电模式暂停轮询</string>
     <string name="setting_stop_polling_screen_off">熄屏停止轮询</string>
-    <string name="setting_stop_polling_screen_off_summary">屏幕关闭时暂停远程轮询</string>
+    <string name="setting_stop_polling_screen_off_summary">熄屏暂停轮询</string>
     <string name="setting_polling_interval">轮询间隔</string>
-    <string name="setting_polling_interval_summary">每 %1$d 秒查询一次远程剪贴板</string>
+    <string name="setting_polling_interval_summary">每 %1$d 秒查询一次</string>
     <string name="setting_screen_off_disconnect">息屏后断开连接</string>
-    <string name="setting_screen_off_disconnect_summary">息屏 %1$s 后断开推送连接以省电，亮屏时自动重连</string>
-    <string name="setting_screen_off_disconnect_disabled">不启用</string>
+    <string name="setting_screen_off_disconnect_summary">息屏 %1$s 后断开连接，亮屏重连</string>
+    <string name="setting_screen_off_disconnect_disabled">息屏后不断开连接</string>
     <string name="setting_disconnect_battery_saver">省电模式断开连接</string>
-    <string name="setting_disconnect_battery_saver_summary">省电模式下断开推送连接</string>
+    <string name="setting_disconnect_battery_saver_summary">省电模式断开连接</string>
+    <string name="setting_disconnect_mobile_data">移动网络断开连接</string>
+    <string name="setting_disconnect_mobile_data_summary">移动网络断开，Wi-Fi 重连</string>
+    <string name="setting_stop_polling_mobile_data">移动网络停止轮询</string>
+    <string name="setting_stop_polling_mobile_data_summary">移动网络暂停轮询，Wi-Fi 恢复</string>
     <string name="setting_history_sync">历史记录同步</string>
     <string name="setting_history_sync_summary">将剪贴板历史同步到服务器</string>
     <string name="setting_auto_download_max_size">自动下载最大大小</string>

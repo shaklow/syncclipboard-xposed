@@ -371,6 +371,7 @@ fun SyncSettingsCard(context: android.content.Context) {
     var bgDownload by remember { mutableStateOf(Prefs.loadConfig(context).enableBackgroundDownload) }
     var stopOnBattery by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnBatterySaver) }
     var stopOnScreenOff by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnScreenOff) }
+    var stopOnMobileData by remember { mutableStateOf(Prefs.loadConfig(context).disconnectOnMobileData) }
     var pollingIntervalSec by remember { mutableStateOf(Prefs.loadConfig(context).pollingIntervalSec.coerceAtLeast(1)) }
     var screenOffDelaySec by remember { mutableStateOf(Prefs.loadConfig(context).screenOffDisconnectDelaySec) }
     var smsUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableSmsUpload) }
@@ -495,6 +496,11 @@ fun SyncSettingsCard(context: android.content.Context) {
         pushConfig(Prefs.loadConfig(context).copy(stopPollingOnScreenOff = enabled))
     }
 
+    fun toggleStopOnMobileData(enabled: Boolean) {
+        stopOnMobileData = enabled
+        pushConfig(Prefs.loadConfig(context).copy(disconnectOnMobileData = enabled))
+    }
+
     fun updatePollingInterval(sec: Int) {
         pollingIntervalSec = sec
         pushConfig(Prefs.loadConfig(context).copy(pollingIntervalSec = sec))
@@ -603,6 +609,12 @@ fun SyncSettingsCard(context: android.content.Context) {
                         summary = stringResource(R.string.setting_disconnect_battery_saver_summary),
                         onCheckedChange = { toggleStopOnBattery(it) }
                     )
+                    SwitchPreference(
+                        checked = stopOnMobileData,
+                        title = stringResource(R.string.setting_disconnect_mobile_data),
+                        summary = stringResource(R.string.setting_disconnect_mobile_data_summary),
+                        onCheckedChange = { toggleStopOnMobileData(it) }
+                    )
                 } else {
                     // ─── WebDAV/S3 模式：保留轮询相关设置 ───
                     SwitchPreference(
@@ -616,6 +628,12 @@ fun SyncSettingsCard(context: android.content.Context) {
                         title = stringResource(R.string.setting_stop_polling_screen_off),
                         summary = stringResource(R.string.setting_stop_polling_screen_off_summary),
                         onCheckedChange = { toggleStopOnScreenOff(it) }
+                    )
+                    SwitchPreference(
+                        checked = stopOnMobileData,
+                        title = stringResource(R.string.setting_stop_polling_mobile_data),
+                        summary = stringResource(R.string.setting_stop_polling_mobile_data_summary),
+                        onCheckedChange = { toggleStopOnMobileData(it) }
                     )
                     val selectedIntervalIndex = remember(pollingIntervalSec, intervalOptions) {
                         var idx = intervalOptions.indexOf(pollingIntervalSec)

@@ -103,23 +103,27 @@
 
     <!-- Sync Settings -->
     <string name="setting_auto_sync">Auto Sync</string>
-    <string name="setting_auto_sync_summary">Automatically sync clipboard in background</string>
+    <string name="setting_auto_sync_summary">Sync clipboard in background</string>
     <string name="setting_background_upload">Background Upload</string>
-    <string name="setting_background_upload_summary">Auto-upload clipboard changes when idle</string>
+    <string name="setting_background_upload_summary">Auto-upload clipboard changes</string>
     <string name="setting_background_download">Background Download</string>
-    <string name="setting_background_download_summary">Auto-download remote clipboard changes</string>
+    <string name="setting_background_download_summary">Auto-download remote changes</string>
     <string name="setting_polling_section">Polling</string>
     <string name="setting_stop_polling_battery_saver">Stop Polling in Battery Saver</string>
-    <string name="setting_stop_polling_battery_saver_summary">Pause remote polling when battery saver is on</string>
+    <string name="setting_stop_polling_battery_saver_summary">Pause polling in battery saver</string>
     <string name="setting_stop_polling_screen_off">Stop Polling When Screen Off</string>
-    <string name="setting_stop_polling_screen_off_summary">Pause remote polling when the screen is off</string>
+    <string name="setting_stop_polling_screen_off_summary">Pause polling when screen off</string>
     <string name="setting_polling_interval">Polling Interval</string>
-    <string name="setting_polling_interval_summary">Fetch remote clipboard every %1$d seconds</string>
+    <string name="setting_polling_interval_summary">Fetch every %1$d seconds</string>
     <string name="setting_screen_off_disconnect">Disconnect After Screen Off</string>
-    <string name="setting_screen_off_disconnect_summary">Disconnect push connection after screen off (%1$s) to save battery; reconnects on screen on</string>
+    <string name="setting_screen_off_disconnect_summary">Disconnect after screen off (%1$s); reconnects on screen on</string>
     <string name="setting_screen_off_disconnect_disabled">Disabled</string>
     <string name="setting_disconnect_battery_saver">Disconnect in Battery Saver</string>
-    <string name="setting_disconnect_battery_saver_summary">Disconnect push connection when battery saver is on</string>
+    <string name="setting_disconnect_battery_saver_summary">Disconnect in battery saver</string>
+    <string name="setting_disconnect_mobile_data">Disconnect on Mobile Data</string>
+    <string name="setting_disconnect_mobile_data_summary">Disconnect on mobile data; reconnects on Wi-Fi</string>
+    <string name="setting_stop_polling_mobile_data">Stop Polling on Mobile Data</string>
+    <string name="setting_stop_polling_mobile_data_summary">Pause polling on mobile data; resumes on Wi-Fi</string>
     <string name="setting_history_sync">History Sync</string>
     <string name="setting_history_sync_summary">Sync clipboard history with server</string>
     <string name="setting_auto_download_max_size">Auto-download Max Size</string>
