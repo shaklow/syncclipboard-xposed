@@ -4,10 +4,23 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: "构建类型"
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - debug
+          - release
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # push 触发时无 input，默认 both
+      BUILD_TYPE: ${{ github.event.inputs.build_type || 'both' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -47,22 +60,32 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Build debug & release APKs
-        run: ./gradlew shell:assembleDebug shell:assembleRelease --no-daemon
+      - name: Build APKs
+        run: |
+          TASKS=""
+          case "$BUILD_TYPE" in
+            debug)   TASKS="shell:assembleDebug" ;;
+            release) TASKS="shell:assembleRelease" ;;
+            both)    TASKS="shell:assembleDebug shell:assembleRelease" ;;
+          esac
+          echo "构建类型: $BUILD_TYPE → gradle 任务: $TASKS"
+          ./gradlew $TASKS --no-daemon
 
       - name: Rename APKs
         run: |
           for type in debug release; do
-            cd "shell/build/outputs/apk/$type"
+            dir="shell/build/outputs/apk/$type"
+            [ -d "$dir" ] || continue
+            cd "$dir"
             for f in shell-*.apk; do
               [ -f "$f" ] && mv "$f" "${f/shell-/syncclipboard-xposed-}"
             done
             cd - >/dev/null
+            echo "=== $type ==="; ls -lh "$dir"/*.apk 2>/dev/null || true
           done
-          echo "=== debug ==="; ls -lh shell/build/outputs/apk/debug/*.apk
-          echo "=== release ==="; ls -lh shell/build/outputs/apk/release/*.apk
 
       - name: Upload debug APKs
+        if: env.BUILD_TYPE == 'both' || env.BUILD_TYPE == 'debug'
         uses: actions/upload-artifact@v4
         with:
           name: syncclipboard-xposed-apks-debug
@@ -70,6 +93,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload release APKs
+        if: env.BUILD_TYPE == 'both' || env.BUILD_TYPE == 'release'
         uses: actions/upload-artifact@v4
         with:
           name: syncclipboard-xposed-apks-release
