@@ -117,7 +117,8 @@
     <string name="setting_polling_interval_summary">每 %1$d 秒查询一次</string>
     <string name="setting_screen_off_disconnect">息屏后断开连接</string>
     <string name="setting_screen_off_disconnect_summary">息屏 %1$s 后断开连接，亮屏重连</string>
-    <string name="setting_screen_off_disconnect_disabled">息屏后不断开连接</string>
+    <string name="setting_screen_off_disconnect_disabled">不断开连接</string>
+    <string name="setting_screen_off_keep_connected_summary">息屏后不断开连接</string>
     <string name="setting_disconnect_battery_saver">省电模式断开连接</string>
     <string name="setting_disconnect_battery_saver_summary">省电模式断开连接</string>
     <string name="setting_disconnect_mobile_data">移动网络断开连接</string>

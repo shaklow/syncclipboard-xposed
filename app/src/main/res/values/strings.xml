@@ -117,7 +117,8 @@
     <string name="setting_polling_interval_summary">Fetch every %1$d seconds</string>
     <string name="setting_screen_off_disconnect">Disconnect After Screen Off</string>
     <string name="setting_screen_off_disconnect_summary">Disconnect after screen off (%1$s); reconnects on screen on</string>
-    <string name="setting_screen_off_disconnect_disabled">Disabled</string>
+    <string name="setting_screen_off_disconnect_disabled">Keep connected</string>
+    <string name="setting_screen_off_keep_connected_summary">Keep the connection alive when screen is off</string>
     <string name="setting_disconnect_battery_saver">Disconnect in Battery Saver</string>
     <string name="setting_disconnect_battery_saver_summary">Disconnect in battery saver</string>
     <string name="setting_disconnect_mobile_data">Disconnect on Mobile Data</string>
