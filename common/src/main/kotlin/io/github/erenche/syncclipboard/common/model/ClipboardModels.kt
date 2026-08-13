@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 /**
  * 剪贴板内容 — 统一的剪贴板数据模型
  */
+@Serializable
 data class ClipboardContent(
     /** 内容类型 */
     val type: ClipboardContentType,

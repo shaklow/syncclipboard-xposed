@@ -1,6 +1,8 @@
 name: Build APK
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -45,20 +47,31 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Build release APKs
-        run: ./gradlew shell:assembleRelease --no-daemon
+      - name: Build debug & release APKs
+        run: ./gradlew shell:assembleDebug shell:assembleRelease --no-daemon
 
       - name: Rename APKs
         run: |
-          cd shell/build/outputs/apk/release
-          for f in shell-*.apk; do
-            mv "$f" "${f/shell-/syncclipboard-xposed-}"
+          for type in debug release; do
+            cd "shell/build/outputs/apk/$type"
+            for f in shell-*.apk; do
+              [ -f "$f" ] && mv "$f" "${f/shell-/syncclipboard-xposed-}"
+            done
+            cd - >/dev/null
           done
-          ls -lh *.apk
+          echo "=== debug ==="; ls -lh shell/build/outputs/apk/debug/*.apk
+          echo "=== release ==="; ls -lh shell/build/outputs/apk/release/*.apk
 
-      - name: Upload APKs (artifact)
+      - name: Upload debug APKs
         uses: actions/upload-artifact@v4
         with:
-          name: syncclipboard-xposed-apks
+          name: syncclipboard-xposed-apks-debug
+          path: shell/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload release APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: syncclipboard-xposed-apks-release
           path: shell/build/outputs/apk/release/*.apk
           if-no-files-found: error

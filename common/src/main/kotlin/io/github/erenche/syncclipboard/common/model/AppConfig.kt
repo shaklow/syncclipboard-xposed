@@ -42,6 +42,11 @@ data class AppConfig(
      *  0 = 不启用（息屏保持连接）；>0 = 息屏 N 秒后断开推送连接并暂停轮询，
      *  亮屏时自动重连并补拉一次。WebDAV/S3 模式忽略此字段。 */
     val screenOffDisconnectDelaySec: Int = 0,
+    /** 移动网络下断开连接/停止轮询。
+     *  SyncClipboard 官方服务器模式：断开 SignalR 推送连接；
+     *  WebDAV/S3 模式：停止远程轮询。
+     *  回到 WiFi 时自动恢复并补拉一次。 */
+    val disconnectOnMobileData: Boolean = false,
     /** 是否启用详细日志（Debug/Info 级别），关闭时仅输出 Warn/Error */
     val enableLogging: Boolean = true,
     /** 日志等级 */

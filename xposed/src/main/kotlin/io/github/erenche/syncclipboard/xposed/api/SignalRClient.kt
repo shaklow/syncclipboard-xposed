@@ -62,14 +62,16 @@ class SignalRClient(
         private const val DEFAULT_HUB_PATH = "/SyncClipboardHub"
         /** SignalR Record Separator，每条消息以此分隔 */
         private const val RECORD_SEPARATOR = '\u001E'
-        /** 轮询间隔 60s（推送连接成功时的兜底间隔，由 SyncEngine 读取） */
+        /** 轮询间隔 60s（推送连接成功时的状态检查兜底间隔，由 SyncEngine 读取） */
         const val PUSH_ACTIVE_POLLING_MS = 60_000L
         /** 重连初始间隔 */
         private const val INITIAL_RECONNECT_DELAY_MS = 2_000L
         /** 重连最大间隔 */
-        private const val MAX_RECONNECT_DELAY_MS = 5 * 60_000L
+        private const val MAX_RECONNECT_DELAY_MS = 60_000L
         /** 连接保持超过该时长视为"成功连接"，断开重连时重置退避间隔 */
         private const val CONNECTED_KEEP_MS = 20_000L
+        /** 心跳间隔：每 30s 主动发送 Ping，防止 NAT/代理因空闲断连 */
+        private const val PING_INTERVAL_MS = 30_000L
     }
 
     /** 推送回调：远程剪贴板变化 */
@@ -276,37 +278,54 @@ class SignalRClient(
     /** 监听并解析消息 */
     private suspend fun listenForMessages(session: DefaultClientWebSocketSession) {
         var handshakeConfirmed = false
-        for (frame in session.incoming) {
-            if (isStopped) break
-            if (frame !is Frame.Text) continue
-            val raw = frame.readText()
-            // SignalR 消息可能包含多条（以 \u001E 分隔）
-            for (msg in raw.split(RECORD_SEPARATOR)) {
-                if (msg.isBlank()) continue
+        // 心跳协程：每 30s 主动发送 Ping，防止 NAT/代理因长时间空闲断连
+        val pingJob = scope.launch {
+            while (isActive && !isStopped) {
+                delay(PING_INTERVAL_MS)
                 try {
-                    val obj = json.parseToJsonElement(msg).jsonObject
-                    // 握手响应处理：成功（含 connectionId，无 type）或失败（含 error）
-                    if (!handshakeConfirmed) {
-                        val error = obj["error"]?.jsonPrimitive?.contentOrNull
-                        if (error != null) {
-                            throw RuntimeException("SignalR handshake failed: $error")
-                        }
-                        // 握手成功
-                        handshakeConfirmed = true
-                        updateConnectionState(true)
-                        Log.w(TAG, "Handshake confirmed, connection established")
-                        Logger.info(TAG, "Handshake confirmed")
-                        // 握手响应本身不包含 type，不继续处理
-                        if (obj["type"] == null) continue
-                    }
-                    handleMessage(obj, session)
+                    session.send(Frame.Text("{\"type\":6}$RECORD_SEPARATOR"))
+                    Logger.debug(TAG, "Ping sent")
                 } catch (e: Exception) {
-                    Logger.warn(TAG, "Failed to parse message: ${e.message}, raw=${msg.take(200)}")
-                    if (e is RuntimeException && e.message?.contains("handshake") == true) {
-                        throw e
+                    Logger.debug(TAG, "Ping send failed: ${e.message}")
+                    break
+                }
+            }
+        }
+        try {
+            for (frame in session.incoming) {
+                if (isStopped) break
+                if (frame !is Frame.Text) continue
+                val raw = frame.readText()
+                // SignalR 消息可能包含多条（以 \u001E 分隔）
+                for (msg in raw.split(RECORD_SEPARATOR)) {
+                    if (msg.isBlank()) continue
+                    try {
+                        val obj = json.parseToJsonElement(msg).jsonObject
+                        // 握手响应处理：成功（含 connectionId，无 type）或失败（含 error）
+                        if (!handshakeConfirmed) {
+                            val error = obj["error"]?.jsonPrimitive?.contentOrNull
+                            if (error != null) {
+                                throw RuntimeException("SignalR handshake failed: $error")
+                            }
+                            // 握手成功
+                            handshakeConfirmed = true
+                            updateConnectionState(true)
+                            Log.w(TAG, "Handshake confirmed, connection established")
+                            Logger.info(TAG, "Handshake confirmed")
+                            // 握手响应本身不包含 type，不继续处理
+                            if (obj["type"] == null) continue
+                        }
+                        handleMessage(obj, session)
+                    } catch (e: Exception) {
+                        Logger.warn(TAG, "Failed to parse message: ${e.message}, raw=${msg.take(200)}")
+                        if (e is RuntimeException && e.message?.contains("handshake") == true) {
+                            throw e
+                        }
                     }
                 }
             }
+        } finally {
+            pingJob.cancel()
         }
     }
 

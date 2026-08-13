@@ -21,6 +21,7 @@ import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.readBytes
 import io.ktor.http.ContentType
@@ -29,6 +30,7 @@ import io.ktor.http.contentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders as KtorHttpHeaders
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.readAvailable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -121,10 +123,22 @@ class SyncClipboardHttpClient(
             Logger.warn(TAG, "downloadFile: server returned ${response.status.value}: ${body.take(300)}")
             throw IllegalStateException("File download failed: server returned ${response.status.value}")
         }
-        val bytes = response.readBytes()
-        destFile.writeBytes(bytes)
+        // 流式写入：大文件不整体读入内存
+        val channel = response.bodyAsChannel()
+        try {
+            destFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = channel.readAvailable(buffer)
+                    if (read == -1) break
+                    output.write(buffer, 0, read)
+                }
+            }
+        } finally {
+            channel.cancel(null)
+        }
 
-        Logger.info(TAG, "File downloaded: $fileName -> $destinationPath (${bytes.size} bytes)")
+        Logger.info(TAG, "File downloaded: $fileName -> $destinationPath")
         return destinationPath
     }
 
@@ -137,7 +151,8 @@ class SyncClipboardHttpClient(
             if (username != null && password != null) {
                 header(HttpHeaders.Authorization, buildAuthHeader())
             }
-            setBody(file.readBytes())
+            // 流式上传：直接以 File 作为 body，避免大文件整体读入内存
+            setBody(file)
         }
     }
 
@@ -367,10 +382,22 @@ class SyncClipboardHttpClient(
                 Logger.warn(TAG, "downloadHistoryData: server returned ${response.status.value}")
                 return null
             }
-            val bytes = response.readBytes()
+            // 流式写入：大文件不整体读入内存
             File(destinationPath).parentFile?.mkdirs()
-            File(destinationPath).writeBytes(bytes)
-            Logger.info(TAG, "downloadHistoryData: saved ${bytes.size} bytes to $destinationPath")
+            val channel = response.bodyAsChannel()
+            try {
+                File(destinationPath).outputStream().buffered().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = channel.readAvailable(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                    }
+                }
+            } finally {
+                channel.cancel(null)
+            }
+            Logger.info(TAG, "downloadHistoryData: saved to $destinationPath")
             destinationPath
         } catch (e: Exception) {
             Logger.warn(TAG, "Failed to download history data: ${e.message}")
