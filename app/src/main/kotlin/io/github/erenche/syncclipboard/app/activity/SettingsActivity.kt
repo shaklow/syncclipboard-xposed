@@ -593,10 +593,15 @@ fun SyncSettingsCard(context: android.content.Context) {
                     }
                     OverlayDropdownPreference(
                         title = stringResource(R.string.setting_screen_off_disconnect),
-                        summary = stringResource(
-                            R.string.setting_screen_off_disconnect_summary,
-                            screenOffLabels[selectedScreenOffIndex]
-                        ),
+                        // 选中"不断开连接"时描述变化；其他选项显示延迟断开说明
+                        summary = if (screenOffOptions[selectedScreenOffIndex] == 0) {
+                            stringResource(R.string.setting_screen_off_keep_connected_summary)
+                        } else {
+                            stringResource(
+                                R.string.setting_screen_off_disconnect_summary,
+                                screenOffLabels[selectedScreenOffIndex]
+                            )
+                        },
                         items = screenOffLabels,
                         selectedIndex = selectedScreenOffIndex,
                         onSelectedIndexChange = { index ->
