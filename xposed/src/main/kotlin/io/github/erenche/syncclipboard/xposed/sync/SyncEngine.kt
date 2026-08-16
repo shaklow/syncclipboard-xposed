@@ -435,6 +435,8 @@ class SyncEngine private constructor() {
                 // 补拉暂停期间错过的内容
                 scope.launch {
                     try {
+                        // 防御：暂停期间关闭自动同步时，恢复后不补拉
+                        if (!config.enableAutoSync) return@launch
                         Logger.info(TAG, "Catch-up fetch after resume")
                         fetchRemoteClipboard(force = true)
                     } catch (e: Exception) {
@@ -1244,6 +1246,8 @@ class SyncEngine private constructor() {
      * 触发时机：新上传成功、轮询 fetch 成功（网络可用信号）、SignalR 重连成功。
      */
     private fun flushUploadQueue(context: Context) {
+        // 队列重放属于后台自动同步行为，总开关关闭时不重放（手动上传不受影响）
+        if (!config.enableAutoSync) return
         if (uploadQueueFlushing) return
         if (UploadQueue.isEmpty(context)) return
         uploadQueueFlushing = true
@@ -1625,6 +1629,12 @@ class SyncEngine private constructor() {
             Logger.info(TAG, "SignalR skipped: disabled by config")
             return
         }
+        // 自动同步总开关关闭时不建立推送连接：SignalR 仅服务于后台自动同步，
+        // 关闭后不应收到推送触发下载（手动同步走 HTTP，不依赖 SignalR）
+        if (!config.enableAutoSync) {
+            Logger.info(TAG, "SignalR skipped: auto sync disabled")
+            return
+        }
 
         try {
             val client = SignalRClient(
@@ -1635,6 +1645,8 @@ class SyncEngine private constructor() {
             client.onProfileChanged = { profile ->
                 // 推送回调：触发强制拉取（复用 fetchRemoteClipboard 的去重和下载逻辑）
                 scope.launch {
+                    // 防御：配置变更竞态期间收到推送时，总开关已关则丢弃
+                    if (!config.enableAutoSync) return@launch
                     Logger.info(TAG, "SignalR push: RemoteProfileChanged, triggering fetch")
                     fetchRemoteClipboard(force = true)
                 }
@@ -1650,6 +1662,8 @@ class SyncEngine private constructor() {
                     // 重连成功后补拉断连期间的数据（与 syncclipboard-mobile 行为一致）
                     scope.launch {
                         try {
+                            // 防御：配置变更竞态期间重连时，总开关已关则不补拉
+                            if (!config.enableAutoSync) return@launch
                             Logger.info(TAG, "SignalR reconnected, triggering catch-up fetch")
                             fetchRemoteClipboard(force = true)
                         } catch (e: Exception) {
@@ -1688,7 +1702,8 @@ class SyncEngine private constructor() {
      *  与 syncHistory 互斥，避免全量合并覆盖推送写入的新版本。 */
     private suspend fun handleRemoteHistoryChanged(dto: HistoryRecordDto) {
         val hs = historyService ?: return
-        if (!config.enableHistorySync) return
+        // 历史推送同步同样受自动同步总开关约束（与轮询路径的历史同步保持一致）
+        if (!config.enableAutoSync || !config.enableHistorySync) return
         historySyncMutex.withLock {
             try {
                 Logger.info(TAG, "SignalR push: RemoteHistoryChanged, hash=${dto.hash}, merging")
