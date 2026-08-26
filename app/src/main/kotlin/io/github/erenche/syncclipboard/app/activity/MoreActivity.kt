@@ -128,13 +128,12 @@ fun MoreScreen() {
         }
     }
 
-    if (showCleanupDialog) {
-        OverlayDialog(
-            show = true,
-            title = stringResource(R.string.item_clean_engine_data),
-            summary = stringResource(R.string.clean_engine_data_confirm),
-            onDismissRequest = { showCleanupDialog = false }
-        ) {
+    OverlayDialog(
+        show = showCleanupDialog,
+        title = stringResource(R.string.item_clean_engine_data),
+        summary = stringResource(R.string.clean_engine_data_confirm),
+        onDismissRequest = { showCleanupDialog = false }
+    ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -162,5 +161,4 @@ fun MoreScreen() {
                 )
             }
         }
-    }
 }

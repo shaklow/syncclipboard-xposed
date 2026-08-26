@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
@@ -41,7 +42,10 @@ import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.CloudFill
+import top.yukonga.miuix.kmp.icon.extended.Hide
 import top.yukonga.miuix.kmp.icon.extended.Link
+import top.yukonga.miuix.kmp.icon.extended.Ok
+import top.yukonga.miuix.kmp.icon.extended.Show
 import top.yukonga.miuix.kmp.icon.extended.Store
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -163,14 +167,14 @@ fun ServerConfigScreen() {
                         Column {
                             ArrowPreference(
                                 title = server.name ?: server.url,
-                                summary = buildServerSummary(server, isActive, context),
+                                summary = buildServerSummary(server, context),
                                 startAction = {
                                     Box(
                                         modifier = Modifier
                                             .size(32.dp)
                                             .background(
                                                 color = MiuixTheme.colorScheme.primary.copy(alpha = if (isActive) 0.12f else 0.06f),
-                                                shape = androidx.compose.foundation.shape.CircleShape
+                                                shape = RoundedCornerShape(10.dp)
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -181,6 +185,24 @@ fun ServerConfigScreen() {
                                                 else MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                             modifier = Modifier.size(18.dp)
                                         )
+                                    }
+                                },
+                                endActions = {
+                                    if (isActive) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = MiuixIcons.Ok,
+                                                contentDescription = stringResource(R.string.server_active),
+                                                tint = MiuixTheme.colorScheme.primary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = stringResource(R.string.server_active),
+                                                fontSize = 12.sp,
+                                                color = MiuixTheme.colorScheme.primary
+                                            )
+                                        }
                                     }
                                 },
                                 onClick = {
@@ -241,17 +263,16 @@ fun ServerConfigScreen() {
                 onDismiss = { showEditDialog = false }
             )
 
-            // ── 删除确认对话框 ─────────────────────────────────────────
-            if (showDeleteConfirm && editingIndex >= 0) {
-                OverlayDialog(
-                    show = true,
-                    title = stringResource(R.string.server_delete),
-                    summary = stringResource(
-                        R.string.server_delete_confirm,
-                        editingServer?.name ?: editingServer?.url ?: ""
-                    ),
-                    onDismissRequest = { showDeleteConfirm = false }
-                ) {
+            // ── 删除确认对话框（常驻组合以保留关闭动画）─────────────────────
+            OverlayDialog(
+                show = showDeleteConfirm && editingIndex >= 0,
+                title = stringResource(R.string.server_delete),
+                summary = stringResource(
+                    R.string.server_delete_confirm,
+                    editingServer?.name ?: editingServer?.url ?: ""
+                ),
+                onDismissRequest = { showDeleteConfirm = false }
+            ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -284,7 +305,6 @@ fun ServerConfigScreen() {
                 }
             }
         }
-    }
 }
 
 /**
@@ -298,25 +318,19 @@ private fun serverTypeIcon(type: ServerType): androidx.compose.ui.graphics.vecto
     }
 
 /**
- * 构建服务器摘要文本
+ * 构建服务器摘要文本（"当前使用"状态由条目右侧徽章展示，摘要不再重复）
  */
-private fun buildServerSummary(server: ServerConfig, isActive: Boolean, context: android.content.Context): String {
+private fun buildServerSummary(server: ServerConfig, context: android.content.Context): String {
     val typeLabel = when (server.type) {
         ServerType.syncclipboard -> context.getString(R.string.server_type_syncclipboard)
         ServerType.webdav -> context.getString(R.string.server_type_webdav)
         ServerType.s3 -> context.getString(R.string.server_type_s3)
     }
-    return buildString {
-        append(typeLabel)
-        if (isActive) {
-            append(" · ")
-            append(context.getString(R.string.server_active))
-        }
-    }
+    return typeLabel
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 服务器编辑/添加对话框 — MIUI X 风格
+// 服务器编辑/添加对话框 — MIUI X 风格（美化版）
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -335,8 +349,6 @@ fun ServerEditDialog(
     val scope = rememberCoroutineScope()
     val isEditing = server != null
 
-    if (!show) return
-
     // Form state — String-based for miuix TextField
     var serverType by remember { mutableStateOf(server?.type ?: ServerType.syncclipboard) }
     var name by remember { mutableStateOf(server?.name ?: "") }
@@ -350,8 +362,25 @@ fun ServerEditDialog(
     var showPassword by remember { mutableStateOf(false) }
     var isTesting by remember { mutableStateOf(false) }
 
+    // 对话框常驻组合以保留关闭动画：每次打开时按当前 server 重置表单
+    LaunchedEffect(show, server) {
+        if (show) {
+            serverType = server?.type ?: ServerType.syncclipboard
+            name = server?.name ?: ""
+            url = server?.url ?: ""
+            username = server?.username ?: ""
+            password = server?.password ?: ""
+            region = server?.region ?: ""
+            bucketName = server?.bucketName ?: ""
+            objectPrefix = server?.objectPrefix ?: ""
+            forcePathStyle = server?.forcePathStyle ?: false
+            showPassword = false
+            isTesting = false
+        }
+    }
+
     OverlayDialog(
-        show = true,
+        show = show,
         title = stringResource(if (isEditing) R.string.server_edit else R.string.server_add),
         onDismissRequest = onDismiss
     ) {
@@ -359,60 +388,25 @@ fun ServerEditDialog(
             modifier = Modifier.verticalScroll(rememberScrollState())
         ) {
             // ── 服务器类型选择 ─────────────────────────────
-            DialogSectionLabel(text = stringResource(R.string.server_type_label))
+            DialogSectionTitle(text = stringResource(R.string.server_type_label))
 
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                ServerType.entries.forEachIndexed { idx, type ->
-                    val isSelected = serverType == type
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { serverType = type }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = isSelected,
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    ServerType.entries.forEach { type ->
+                        val isSelected = serverType == type
+                        ServerTypeOption(
+                            type = type,
+                            isSelected = isSelected,
                             onClick = { serverType = type }
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = when (type) {
-                                    ServerType.syncclipboard -> stringResource(R.string.server_type_syncclipboard)
-                                    ServerType.webdav -> stringResource(R.string.server_type_webdav)
-                                    ServerType.s3 -> stringResource(R.string.server_type_s3)
-                                },
-                                fontSize = 15.sp,
-                                color = if (isSelected) MiuixTheme.colorScheme.primary
-                                    else MiuixTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = when (type) {
-                                    ServerType.syncclipboard -> stringResource(R.string.server_type_syncclipboard_desc)
-                                    ServerType.webdav -> stringResource(R.string.server_type_webdav_desc)
-                                    ServerType.s3 -> stringResource(R.string.server_type_s3_desc)
-                                },
-                                fontSize = 12.sp,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            )
-                        }
-                    }
-                    if (idx < ServerType.entries.size - 1) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            color = MiuixTheme.colorScheme.dividerLine
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             // ── 连接信息字段 ───────────────────────────────
-            DialogSectionLabel(text = stringResource(R.string.server_section_connection))
+            DialogSectionTitle(text = stringResource(R.string.server_section_connection))
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -421,7 +415,6 @@ fun ServerEditDialog(
                         onValueChange = { name = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = stringResource(R.string.server_name),
-
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                     )
@@ -432,7 +425,6 @@ fun ServerEditDialog(
                         onValueChange = { url = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = stringResource(R.string.server_url),
-
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     )
@@ -442,9 +434,8 @@ fun ServerEditDialog(
                         value = username,
                         onValueChange = { username = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = if (serverType == ServerType.s3) "Access Key ID"
+                        label = if (serverType == ServerType.s3) stringResource(R.string.server_access_key)
                             else stringResource(R.string.server_username),
-
                         singleLine = true,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
@@ -453,21 +444,25 @@ fun ServerEditDialog(
                         value = password,
                         onValueChange = { password = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = if (serverType == ServerType.s3) "Secret Access Key"
+                        label = if (serverType == ServerType.s3) stringResource(R.string.server_secret_key)
                             else stringResource(R.string.server_password),
-
                         singleLine = true,
                         visualTransformation = if (showPassword) VisualTransformation.None
                         else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
-                            Text(
-                                text = if (showPassword) "Hide" else "Show",
-                                fontSize = 14.sp,
-                                color = MiuixTheme.colorScheme.primary,
-                                modifier = Modifier.clickable { showPassword = !showPassword }
-                                    .padding(horizontal = 4.dp)
-                            )
+                            IconButton(
+                                onClick = { showPassword = !showPassword }
+                            ) {
+                                Icon(
+                                    imageVector = if (showPassword) MiuixIcons.Hide else MiuixIcons.Show,
+                                    contentDescription = stringResource(
+                                        if (showPassword) R.string.password_hide else R.string.password_show
+                                    ),
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     )
                 }
@@ -475,8 +470,8 @@ fun ServerEditDialog(
 
             // ── S3 专用字段 ─────────────────────────────────
             if (serverType == ServerType.s3) {
-                Spacer(modifier = Modifier.height(20.dp))
-                DialogSectionLabel(text = stringResource(R.string.server_section_s3))
+                Spacer(modifier = Modifier.height(18.dp))
+                DialogSectionTitle(text = stringResource(R.string.server_section_s3))
 
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -485,7 +480,6 @@ fun ServerEditDialog(
                             onValueChange = { region = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = stringResource(R.string.server_region),
-    
                             singleLine = true,
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -495,7 +489,6 @@ fun ServerEditDialog(
                             onValueChange = { bucketName = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = stringResource(R.string.server_bucket),
-    
                             singleLine = true,
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -505,7 +498,6 @@ fun ServerEditDialog(
                             onValueChange = { objectPrefix = it },
                             modifier = Modifier.fillMaxWidth(),
                             label = stringResource(R.string.server_prefix),
-    
                             singleLine = true,
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -532,19 +524,20 @@ fun ServerEditDialog(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             // ── 操作区 ─────────────────────────────────────
-            DialogSectionLabel(text = stringResource(R.string.server_section_actions))
+            DialogSectionTitle(text = stringResource(R.string.server_section_actions))
 
             // 设为当前服务器 (仅编辑时)
             if (onSetActive != null) {
                 TextButton(
                     text = stringResource(R.string.server_set_active),
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
                     onClick = onSetActive,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
             }
 
             // 测试连接 — 通过 bridge 实际测试
@@ -614,67 +607,80 @@ fun ServerEditDialog(
                 enabled = !isTesting
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // 底部操作行：删除/取消 在左侧，保存作为主按钮在右侧
+            // 底部操作行：三个按钮统一为 MIUIX 填充式按钮（删除/取消/保存），按语义配色
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 删除按钮 (仅编辑时)
+                // 删除按钮 (仅编辑时) — 错误色填充
                 if (onDelete != null) {
-                    TextButton(
-                        text = stringResource(R.string.action_delete),
+                    Button(
                         onClick = onDelete,
                         modifier = Modifier.weight(1f),
-                        colors = TextButtonColors(
+                        minHeight = 40.dp,
+                        minWidth = 0.dp,
+                        insideMargin = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        colors = ButtonColors(
                             color = MiuixTheme.colorScheme.errorContainer,
                             disabledColor = MiuixTheme.colorScheme.errorContainer,
-                            textColor = MiuixTheme.colorScheme.error,
-                            disabledTextColor = MiuixTheme.colorScheme.error
+                            contentColor = MiuixTheme.colorScheme.error,
+                            disabledContentColor = MiuixTheme.colorScheme.error
                         )
-                    )
+                    ) {
+                        Text(stringResource(R.string.action_delete))
+                    }
                 }
 
-                // 取消
-                TextButton(
-                    text = stringResource(R.string.action_cancel),
+                // 取消 — 次级实心按钮
+                Button(
                     onClick = onDismiss,
-                    modifier = Modifier.weight(1f)
-                )
+                    modifier = Modifier.weight(1f),
+                    minHeight = 40.dp,
+                    minWidth = 0.dp,
+                    insideMargin = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    colors = ButtonColors(
+                        color = MiuixTheme.colorScheme.secondary,
+                        disabledColor = MiuixTheme.colorScheme.disabledSecondary,
+                        contentColor = MiuixTheme.colorScheme.onSecondary,
+                        disabledContentColor = MiuixTheme.colorScheme.disabledOnSecondary
+                    )
+                ) {
+                    Text(stringResource(R.string.action_cancel))
+                }
 
-                // 保存 — 主按钮
-                TextButton(
-                    text = stringResource(R.string.action_save),
+                // 保存 — 主按钮（主色填充）
+                Button(
                     onClick = {
                         // 验证
                         when (serverType) {
                             ServerType.s3 -> {
                                 if (bucketName.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.server_bucket_required), Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                    return@Button
                                 }
                                 if (username.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.server_access_key_required), Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                    return@Button
                                 }
                                 if (password.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.server_secret_key_required), Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                    return@Button
                                 }
                             }
                             else -> {
                                 if (url.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.server_url_required), Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                    return@Button
                                 }
                                 if (username.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.server_username_required), Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                    return@Button
                                 }
                                 if (password.isBlank()) {
                                     Toast.makeText(context, context.getString(R.string.server_password_required), Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                    return@Button
                                 }
                             }
                         }
@@ -694,25 +700,98 @@ fun ServerEditDialog(
                         )
                     },
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary()
-                )
+                    minHeight = 40.dp,
+                    minWidth = 0.dp,
+                    insideMargin = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(stringResource(R.string.action_save))
+                }
             }
         }
     }
 }
 
 /**
- * 对话框内的小节标题 — 比 SmallTitle 更紧凑，适配对话框内边距。
+ * 服务器类型选项行 — 图标 + 标题/说明 + 单选，选中态高亮。
  */
 @Composable
-private fun DialogSectionLabel(text: String) {
-    Text(
-        text = text,
-        modifier = Modifier.padding(bottom = 8.dp),
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium,
-        color = MiuixTheme.colorScheme.onBackgroundVariant
-    )
+private fun ServerTypeOption(
+    type: ServerType,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val primary = MiuixTheme.colorScheme.primary
+    val label = when (type) {
+        ServerType.syncclipboard -> stringResource(R.string.server_type_syncclipboard)
+        ServerType.webdav -> stringResource(R.string.server_type_webdav)
+        ServerType.s3 -> stringResource(R.string.server_type_s3)
+    }
+    val desc = when (type) {
+        ServerType.syncclipboard -> stringResource(R.string.server_type_syncclipboard_desc)
+        ServerType.webdav -> stringResource(R.string.server_type_webdav_desc)
+        ServerType.s3 -> stringResource(R.string.server_type_s3_desc)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isSelected) primary.copy(alpha = 0.08f) else Color.Transparent)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(
+                        color = if (isSelected) primary.copy(alpha = 0.15f)
+                            else MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(10.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = serverTypeIcon(type),
+                    contentDescription = null,
+                    tint = if (isSelected) primary else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    fontSize = 15.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) primary else MiuixTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = desc,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                )
+            }
+            RadioButton(
+                selected = isSelected,
+                onClick = onClick
+            )
+        }
+    }
+}
+
+/**
+ * 对话框内的小节标题 — 使用 MIUIX SmallTitle，适配对话框内边距。
+ */
+@Composable
+private fun DialogSectionTitle(text: String) {
+    Box(modifier = Modifier.padding(bottom = 8.dp)) {
+        SmallTitle(
+            text = text,
+            insideMargin = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+        )
+    }
 }
 
 /**
@@ -755,4 +834,3 @@ private fun buildTestUrl(config: ServerConfig): String {
         }
     }
 }
-

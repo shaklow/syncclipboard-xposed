@@ -57,6 +57,10 @@
     <string name="server_url">Server URL</string>
     <string name="server_username">Username</string>
     <string name="server_password">Password</string>
+    <string name="server_access_key">Access Key ID</string>
+    <string name="server_secret_key">Secret Access Key</string>
+    <string name="password_show">Show</string>
+    <string name="password_hide">Hide</string>
     <string name="server_name">Display Name</string>
     <string name="server_region">Region</string>
     <string name="server_bucket">Bucket Name</string>

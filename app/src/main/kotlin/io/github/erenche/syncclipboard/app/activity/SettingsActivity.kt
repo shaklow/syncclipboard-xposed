@@ -217,16 +217,15 @@ fun ThemeSettingsCard(context: android.content.Context, activity: Activity?) {
         }
     }
 
-    // ── 颜色选择对话框 ──
-    if (showColorPicker) {
-        ThemeColorPickerDialog(
-            currentColorId = currentColorId,
-            onColorSelected = { themeColor ->
-                ThemeState.updateThemeColor(context, themeColor.id)
-            },
-            onDismiss = { showColorPicker = false }
-        )
-    }
+    // ── 颜色选择对话框（常驻组合以保留关闭动画）──
+    ThemeColorPickerDialog(
+        show = showColorPicker,
+        currentColorId = currentColorId,
+        onColorSelected = { themeColor ->
+            ThemeState.updateThemeColor(context, themeColor.id)
+        },
+        onDismiss = { showColorPicker = false }
+    )
 }
 
 /**
@@ -234,13 +233,14 @@ fun ThemeSettingsCard(context: android.content.Context, activity: Activity?) {
  */
 @Composable
 private fun ThemeColorPickerDialog(
+    show: Boolean,
     currentColorId: String,
     onColorSelected: (ThemeColor) -> Unit,
     onDismiss: () -> Unit
 ) {
     val isDark = io.github.erenche.syncclipboard.app.compose.theme.CurrentThemeConfigs.isDark
     OverlayDialog(
-        show = true,
+        show = show,
         title = stringResource(R.string.setting_theme_color),
         onDismissRequest = onDismiss
     ) {
