@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
+import io.github.erenche.syncclipboard.common.PackageNames
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.AppConfig
 import io.github.erenche.syncclipboard.common.model.ClipboardContent
@@ -74,6 +75,16 @@ class SyncEngine private constructor() {
     private var apiClient: SyncClipboardApi? = null
     private var appContext: Context? = null
     private var historyService: HistoryService? = null
+
+    /** 历史服务懒加载：首次真正用到时才初始化（Room DB、目录），
+     *  enableHistorySync=false 的用户不产生任何开销 */
+    @Synchronized
+    private fun getHistoryService(): HistoryService? {
+        if (historyService == null) {
+            appContext?.let { historyService = HistoryService(it) }
+        }
+        return historyService
+    }
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
     /** SignalR 推送客户端（仅官方服务器模式创建） */
@@ -148,6 +159,13 @@ class SyncEngine private constructor() {
     /** 历史同步互斥锁，防止并发 syncHistory 调用 */
     private val historySyncMutex = Mutex()
 
+    /** 上次历史增量同步完成时间（基于 elapsedRealtime，不受用户改时间影响） */
+    @Volatile
+    private var lastHistorySyncAt = 0L
+
+    /** SignalR 在线时历史增量同步间隔：推送已实时合并单条，轮询增量仅作兜底 */
+    private val historySyncIntervalSignalRMs = 15 * 60_000L
+
     /** 每次同步最多 PATCH 的记录数。
      *  PATCH 只传元数据（starred/pinned/isDelete/version），无文件上传，单条很轻量；
      *  放宽到 100 以保证批量改动（如 clearAll、批量置顶）能在少数几次同步内推完。 */
@@ -181,7 +199,6 @@ class SyncEngine private constructor() {
         processName = getProcessName(context)
         Logger.info(TAG, "initialize() process=$processName")
 
-        historyService = HistoryService(context)
         config = Prefs.loadConfig(context)
         // 加载持久化的历史同步游标（增量同步用）
         lastSyncTime = Prefs.loadHistoryLastSyncTime(context)
@@ -194,6 +211,9 @@ class SyncEngine private constructor() {
         rebuildApiClient()
         setupBridgeRouting(context)
         registerPowerStateMonitor()
+        // 初始状态检查：省电模式可能在引擎启动前就已开启（广播早已发过，接收器等不到），
+        // 直接评估当前状态，避免 SignalR 在省电模式下持续在线
+        reevaluatePowerSaveState()
         start()
 
         Logger.info(TAG, "SyncEngine initialized, servers=${config.servers.size}, activeIdx=${config.activeServerIndex}")
@@ -220,8 +240,11 @@ class SyncEngine private constructor() {
         // 注册网络监听（移动网络下断开 SignalR / 停止轮询）
         registerNetworkMonitor()
 
-        // 启动 SignalR 推送连接（仅官方服务器模式生效）
-        signalRClient?.start()
+        // 监听本 App 卸载：清理引擎侧数据（历史库/历史文件/下载目录/缓存）
+        registerUninstallMonitor()
+
+        // 启动 SignalR 推送连接（仅官方服务器模式生效；省电/息屏/移动网络暂停时不启动）
+        if (!powerPauseApplied) signalRClient?.start()
 
         // 远程轮询 — 定期从服务器拉取新内容
         scope.launch {
@@ -259,19 +282,20 @@ class SyncEngine private constructor() {
                             Logger.info(TAG, "Polling active")
                             notifySyncStateChanged()
                         }
-                        // 网络可达：顺带重放上传失败队列
-                        appContext?.let { flushUploadQueue(it) }
-                            // 历史增量同步：每轮轮询后尝试增量拉取（tryLock 跳过并发）
-                            // 与 Win 端一致：后台定期增量同步，仅拉 modifiedAfter 之后的记录
-                            // 独立协程执行，避免首次全量同步（游标为 0 时）阻塞剪贴板轮询
-                            // 仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 API
+                            // 历史增量同步：轮询中后台增量拉取（独立协程），手动刷新走 FORCE_SYNC_HISTORY
+                            // SignalR 在线时推送已实时合并单条记录，增量同步降为 15 分钟兜底；
+                            // 离线时保持每轮执行。仅 SyncClipboard 官方服务器模式生效。
                             val server = config.servers.getOrNull(config.activeServerIndex)
                             if (config.enableHistorySync && server?.type == ServerType.syncclipboard) {
-                                scope.launch {
-                                    try {
-                                        syncHistory(force = false)
-                                    } catch (e: Exception) {
-                                        Logger.warn(TAG, "Polling history sync error: ${e.message}")
+                                val sinceLast = android.os.SystemClock.elapsedRealtime() - lastHistorySyncAt
+                                if (!isSignalRConnected || sinceLast >= historySyncIntervalSignalRMs) {
+                                    scope.launch {
+                                        try {
+                                            syncHistory(force = false)
+                                            lastHistorySyncAt = android.os.SystemClock.elapsedRealtime()
+                                        } catch (e: Exception) {
+                                            Logger.warn(TAG, "Polling history sync error: ${e.message}")
+                                        }
                                     }
                                 }
                             }
@@ -290,6 +314,8 @@ class SyncEngine private constructor() {
                     }
                     // 历史同步：轮询中自动增量同步（独立协程），手动刷新走 FORCE_SYNC_HISTORY
                 } else {
+                    // 兜底：省电模式广播丢失/时序遗漏时，由状态循环补齐暂停/恢复
+                    reevaluatePowerSaveState()
                     if (isPollingActive) {
                         isPollingActive = false
                         notifySyncStateChanged()
@@ -399,17 +425,22 @@ class SyncEngine private constructor() {
         }
     }
 
-    /** 省电模式开关：开启且配置断开时暂停，关闭时恢复 */
-    private fun onPowerSaveModeChanged() {
+    /** 省电模式开关广播：重新评估暂停状态 */
+    private fun onPowerSaveModeChanged() = reevaluatePowerSaveState()
+
+    /** 重新评估省电模式暂停状态。
+     *  除广播外，还需在初始启动（省电模式早已开启、广播已错过）、配置变更
+     *  （用户在省电模式已开启时才打开“省电停止”开关）、轮询状态循环（广播
+     *  丢失兜底）时调用，暂停与恢复两种方向都覆盖。 */
+    private fun reevaluatePowerSaveState() {
         if (!isSignalRDisconnectEnabled() && !batterySaverPaused) return
         val pm = appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
-        if (pm.isPowerSaveMode) {
-            if (config.stopPollingOnBatterySaver && !batterySaverPaused) {
-                Logger.info(TAG, "Battery saver on, pausing SignalR")
-                batterySaverPaused = true
-                applyPowerPause()
-            }
-        } else if (batterySaverPaused) {
+        val shouldPause = pm.isPowerSaveMode && config.stopPollingOnBatterySaver
+        if (shouldPause && !batterySaverPaused) {
+            Logger.info(TAG, "Battery saver on, pausing SignalR")
+            batterySaverPaused = true
+            applyPowerPause()
+        } else if (batterySaverPaused && (!pm.isPowerSaveMode || !config.stopPollingOnBatterySaver)) {
             Logger.info(TAG, "Battery saver off, resuming SignalR")
             batterySaverPaused = false
             applyPowerPause()
@@ -458,6 +489,11 @@ class SyncEngine private constructor() {
                 as? android.net.ConnectivityManager ?: return
             val callback = object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
+                    // 网络恢复：重放上传失败队列（主要触发点，替代每轮 fetch 成功后的重放）
+                    if (!networkWasAvailable) {
+                        Logger.info(TAG, "Network available, flushing upload queue")
+                        appContext?.let { flushUploadQueue(it) }
+                    }
                     handleNetworkChange(cm)
                 }
                 override fun onLost(network: android.net.Network) {
@@ -481,15 +517,48 @@ class SyncEngine private constructor() {
 
     /** 判断当前活动网络是否为 WiFi，更新移动网络暂停状态 */
     private fun handleNetworkChange(cm: android.net.ConnectivityManager) {
+        val hasNetwork = cm.activeNetwork != null
         val isWifi = cm.activeNetwork?.let { network ->
             cm.getNetworkCapabilities(network)
                 ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
         } ?: false
+        networkWasAvailable = hasNetwork
         val shouldPause = config.disconnectOnMobileData && !isWifi
         if (shouldPause != mobileDataPaused) {
             mobileDataPaused = shouldPause
             Logger.info(TAG, "Network changed: isWifi=$isWifi, mobileDataPaused=$mobileDataPaused")
             applyPowerPause()
+        }
+    }
+
+    // ─── 卸载自清理 ─────────────────────────────────────────────
+
+    /** 卸载监听广播接收器（仅系统发送的 PACKAGE_FULLY_REMOVED，防止第三方伪造触发清理） */
+    private var uninstallReceiver: BroadcastReceiver? = null
+
+    private fun registerUninstallMonitor() {
+        try {
+            val ctx = appContext ?: return
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    // 仅信任系统发出的卸载广播：第三方应用可伪造发送该 action，但不具备 system uid
+                    if (android.os.Binder.getCallingUid() != android.os.Process.SYSTEM_UID) return
+                    if (intent.data?.scheme != "package") return
+                    if (intent.data?.schemeSpecificPart != PackageNames.APPLICATION) return
+                    Logger.info(TAG, "App uninstalled (PACKAGE_FULLY_REMOVED), clearing engine data")
+                    clearEngineData()
+                }
+            }
+            val filter = IntentFilter(Intent.ACTION_PACKAGE_FULLY_REMOVED).apply {
+                addDataScheme("package")
+            }
+            androidx.core.content.ContextCompat.registerReceiver(
+                ctx, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED
+            )
+            uninstallReceiver = receiver
+            Logger.info(TAG, "Uninstall monitor registered")
+        } catch (e: Exception) {
+            Logger.warn(TAG, "Failed to register uninstall monitor: ${e.message}")
         }
     }
 
@@ -541,6 +610,11 @@ class SyncEngine private constructor() {
                 cm?.unregisterNetworkCallback(cb)
             }
             networkCallback = null
+        }
+        // 停止卸载监听
+        uninstallReceiver?.let { receiver ->
+            runCatching { appContext?.unregisterReceiver(receiver) }
+            uninstallReceiver = null
         }
         // 停止 SignalR 连接
         signalRClient?.stop()
@@ -654,7 +728,7 @@ class SyncEngine private constructor() {
         scope.launch {
             try {
                 Logger.debug(TAG, "Local clipboard changed: ${content.text.take(50)}...")
-                historyService?.addLocalContent(content)
+                getHistoryService()?.addLocalContent(content)
                 notifyContentChanged()
                 if (config.enableAutoSync && config.enableBackgroundUpload) {
                     val uploaded = uploadContent(content)
@@ -688,6 +762,8 @@ class SyncEngine private constructor() {
         val oldActiveIdx = config.activeServerIndex
         config = newConfig
         rebuildApiClient()  // 内部会重建 SignalR 客户端
+        // 重新评估省电模式：用户可能在省电模式已开启时才打开“省电停止”开关
+        reevaluatePowerSaveState()
         // 配置变更后重启 SignalR 连接（若已创建且未被息屏/省电暂停）
         if (isRunning && !powerPauseApplied) {
             signalRClient?.start()
@@ -762,7 +838,7 @@ class SyncEngine private constructor() {
      */
     private suspend fun syncHistory(force: Boolean = false, fullSync: Boolean = false): SyncHistoryResult {
         val client = apiClient ?: return SyncHistoryResult(false, 0, "API client is null")
-        val hs = historyService ?: return SyncHistoryResult(false, 0, "History service is null")
+        val hs = getHistoryService() ?: return SyncHistoryResult(false, 0, "History service is null")
         // 互斥锁：防止轮询、FORCE_SYNC_HISTORY、剪贴板变化触发并发 syncHistory
         if (force || fullSync) {
             // 手动触发/全量：等待正在进行的同步完成（最多 15s，防止轮询同步卡住时
@@ -1023,7 +1099,7 @@ class SyncEngine private constructor() {
                 // 手动上传绕过 autoSync/bgUpload 开关，直接上传
                 val hash = content.profileHash ?: HashUtils.sha256(content.text)
                 lastLocalHash = hash
-                historyService?.addLocalContent(content)
+                getHistoryService()?.addLocalContent(content)
                 notifyContentChanged()
                 success = uploadContent(content)
                 // 历史同步改为手动触发，上传后不再自动 syncHistory
@@ -1079,13 +1155,94 @@ class SyncEngine private constructor() {
                     hasData = false,
                     timestamp = System.currentTimeMillis()
                 )
-                historyService?.addLocalContent(content)
+                getHistoryService()?.addLocalContent(content)
                 notifyContentChanged()
                 val ok = uploadContent(content)
                 // 历史同步改为手动触发，上传后不再自动 syncHistory
                 Logger.info(TAG, "uploadText: ok=$ok text=${text.take(20)}")
             } catch (e: Exception) {
                 Logger.error(TAG, "uploadText failed", e)
+            }
+        }
+    }
+
+    /**
+     * App 进程上传文件成功后向引擎登记（分享/主页"上传文件"入口）。
+     *
+     * 引擎负责：按同一份文件计算 hash 写入历史、复制文件到历史目录、
+     * 更新远端缓存（lastRemoteHash/profile），避免轮询把刚上传的内容
+     * 误判为"远端新内容"而重复下载。上传本身已不经过引擎（不再依赖 SystemUI 进程存续）。
+     */
+    fun registerUploadedContent(fileUri: String, fileName: String, isImage: Boolean, fileSize: Long) {
+        if (appContext == null || fileUri.isBlank() || fileName.isBlank()) return
+        scope.launch {
+            try {
+                val ctx = appContext ?: return@launch
+                val type = if (isImage) ClipboardContentType.Image else ClipboardContentType.File
+                // 按与 App 上传时相同的规则计算 hash（分块流式）
+                val hash = try {
+                    val input = ctx.contentResolver.openInputStream(android.net.Uri.parse(fileUri))
+                    if (input != null) HashUtils.computeFileHash(fileName, input)
+                    else HashUtils.sha256(fileName)
+                } catch (e: Exception) {
+                    Logger.warn(TAG, "registerUploadedContent: hash fallback: ${e.message}")
+                    HashUtils.sha256(fileName)
+                }
+                val content = ClipboardContent(
+                    type = type,
+                    text = fileName,
+                    fileUri = fileUri,
+                    fileName = fileName,
+                    fileSize = if (fileSize > 0) fileSize else null,
+                    hasData = true,
+                    profileHash = hash,
+                    timestamp = System.currentTimeMillis()
+                )
+                getHistoryService()?.addLocalContent(content)
+                getHistoryService()?.enforceDiskLimit()
+                lastRemoteHash = hash
+                Prefs.saveLastRemoteHash(ctx, hash)
+                lastRemoteProfile = ProfileDto(
+                    type = type,
+                    hash = hash,
+                    text = fileName,
+                    hasData = true,
+                    dataName = fileName,
+                    size = if (fileSize > 0) fileSize else null
+                )
+                notifyContentChanged()
+                Logger.info(TAG, "registerUploadedContent: hash=${hash.take(12)}, name=$fileName")
+            } catch (e: Exception) {
+                Logger.error(TAG, "registerUploadedContent failed", e)
+            }
+        }
+    }
+
+    /**
+     * 清理引擎本地数据：历史库（软删除+文件）、下载目录、上传临时文件、远端缓存。
+     * 由 App 手动触发（"清理引擎数据"）或 App 卸载时自动触发。
+     */
+    fun clearEngineData() {
+        scope.launch {
+            try {
+                getHistoryService()?.clearAll()
+                appContext?.let { ctx ->
+                    java.io.File(ctx.filesDir, "downloads").let { if (it.exists()) it.deleteRecursively() }
+                    ctx.cacheDir.listFiles()
+                        ?.filter { it.name.startsWith("upload_") }
+                        ?.forEach { it.delete() }
+                    Prefs.saveLastRemoteHash(ctx, null)
+                    Prefs.saveLastRemoteFilePath(ctx, null)
+                }
+                lastSyncTime = 0L
+                appContext?.let { Prefs.resetHistoryLastSyncTime(it) }
+                lastRemoteProfile = null
+                lastRemoteHash = null
+                lastRemoteFilePath = null
+                notifyContentChanged()
+                Logger.info(TAG, "clearEngineData: engine local data cleared")
+            } catch (e: Exception) {
+                Logger.warn(TAG, "clearEngineData failed: ${e.message}")
             }
         }
     }
@@ -1241,9 +1398,14 @@ class SyncEngine private constructor() {
     @Volatile
     private var uploadQueueFlushing = false
 
+    /** 网络是否可用（用于 onAvailable 时判断"恢复"场景，避免重复触发队列重放） */
+    @Volatile
+    private var networkWasAvailable = true
+
     /**
      * 重放上传重试队列：按序重试，成功即出队，失败保留（下次再试）。
-     * 触发时机：新上传成功、轮询 fetch 成功（网络可用信号）、SignalR 重连成功。
+     * 触发时机：入队时、网络恢复（onAvailable）、新上传成功、SignalR 重连成功。
+     * （不再在每轮 fetch 成功后触发，避免高频空检查）
      */
     private fun flushUploadQueue(context: Context) {
         // 队列重放属于后台自动同步行为，总开关关闭时不重放（手动上传不受影响）
@@ -1278,7 +1440,16 @@ class SyncEngine private constructor() {
         }
     }
 
-    private suspend fun uploadContent(content: ClipboardContent): Boolean {
+    /**
+     * 上传剪贴板内容到服务器。
+     *
+     * @param onProgress 字节级上传进度回调（sentBytes, totalBytes），
+     *   totalBytes 未知时为 0；仅文件类型上传时产生。
+     */
+    private suspend fun uploadContent(
+        content: ClipboardContent,
+        onProgress: ((Long, Long) -> Unit)? = null
+    ): Boolean {
         val client = apiClient ?: run {
             Logger.warn(TAG, "No API client configured, skipping upload")
             return false
@@ -1301,7 +1472,7 @@ class SyncEngine private constructor() {
                 content
             }
 
-            client.putContent(uploadContent)
+            client.putContent(uploadContent, onProgress)
             lastSyncTime = System.currentTimeMillis()
             // 设置 lastRemoteHash，防止轮询循环立即下载刚上传的内容
             // 使用 uploadContent（已将 content:// 转为本地路径）保证文件 hash 可读
@@ -1365,6 +1536,13 @@ class SyncEngine private constructor() {
             var downloadedFileUri: android.net.Uri? = null
             var downloadedFilePath: String? = null
             if (profile.hasData && profile.dataName != null) {
+                // 大文件前置拦截：超过自动下载上限（autoDownloadMaxSize）时跳过下载，
+                // 避免 SystemUI 为超大文件耗费流量/IO；内容仍会写剪贴板元数据
+                val size = profile.size ?: 0
+                if (size > config.autoDownloadMaxSize) {
+                    Logger.info(TAG, "downloadAndApplyContent: skip large file ${profile.dataName} " +
+                        "(${size}B > limit ${config.autoDownloadMaxSize}B), keeping clipboard text only")
+                } else {
                 val name = profile.dataName!!
                 val destPath = "${context.filesDir}/downloads/$name"
                 Logger.info(TAG, "downloadAndApplyContent: downloading file $name")
@@ -1373,6 +1551,7 @@ class SyncEngine private constructor() {
                 downloadedFileUri = android.net.Uri.fromFile(destFile)
                 downloadedFilePath = destPath
                 Logger.info(TAG, "File downloaded: $name -> $destPath (size=${destFile.length()})")
+                }
             } else {
                 Logger.debug(TAG, "downloadAndApplyContent: no file data, skipping download")
             }
@@ -1416,7 +1595,7 @@ class SyncEngine private constructor() {
                 profileHash = profile.hash,
                 timestamp = System.currentTimeMillis()
             )
-            historyService?.addRemoteContent(historyContent, downloadedFilePath)
+            getHistoryService()?.addRemoteContent(historyContent, downloadedFilePath)
             Logger.debug(TAG, "downloadAndApplyContent: history recorded")
             lastRemoteFilePath = downloadedFilePath
             appContext?.let { Prefs.saveLastRemoteFilePath(it, downloadedFilePath) }
@@ -1559,7 +1738,10 @@ class SyncEngine private constructor() {
         }
     }
 
-    /** 通知 app 进程手动操作结果（同步/上传） */
+    /**
+     * 通知 app 进程手动操作结果（同步/上传）。
+     * 分享/文件上传已改由 App 进程直接执行，不再经引擎回传。
+     */
     private fun notifyActionResult(action: String, success: Boolean, message: String?) {
         val context = appContext ?: return
         try {
@@ -1670,6 +1852,18 @@ class SyncEngine private constructor() {
                             Logger.warn(TAG, "Catch-up fetch on SignalR reconnect failed: ${e.message}")
                         }
                     }
+                    // 断连期间可能漏掉历史推送：重连后立即补一次历史增量同步
+                    scope.launch {
+                        try {
+                            val server = config.servers.getOrNull(config.activeServerIndex)
+                            if (config.enableHistorySync && server?.type == ServerType.syncclipboard) {
+                                syncHistory(force = false)
+                                lastHistorySyncAt = android.os.SystemClock.elapsedRealtime()
+                            }
+                        } catch (e: Exception) {
+                            Logger.warn(TAG, "Catch-up history sync on reconnect failed: ${e.message}")
+                        }
+                    }
                     // 网络可达：顺带重放上传失败队列
                     appContext?.let { flushUploadQueue(it) }
                 }
@@ -1701,7 +1895,7 @@ class SyncEngine private constructor() {
     /** 处理 SignalR 推送的历史记录变化（增量合并单条 DTO）。
      *  与 syncHistory 互斥，避免全量合并覆盖推送写入的新版本。 */
     private suspend fun handleRemoteHistoryChanged(dto: HistoryRecordDto) {
-        val hs = historyService ?: return
+        val hs = getHistoryService() ?: return
         // 历史推送同步同样受自动同步总开关约束（与轮询路径的历史同步保持一致）
         if (!config.enableAutoSync || !config.enableHistorySync) return
         historySyncMutex.withLock {
@@ -1720,7 +1914,7 @@ class SyncEngine private constructor() {
      *  获取 historySyncMutex 避免与 syncHistory 并发，复用 processPatchItem 逻辑。
      *  仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 PATCH，仅做本地变更。 */
     private suspend fun pushSingleHistoryUpdate(id: String) {
-        val hs = historyService ?: return
+        val hs = getHistoryService() ?: return
         val client = apiClient ?: return
         val server = config.servers.getOrNull(config.activeServerIndex)
         if (server == null || server.type != ServerType.syncclipboard) return
@@ -1804,9 +1998,48 @@ class SyncEngine private constructor() {
                 uploadText(text)
             }
 
+            onCommand(BridgeKeys.REGISTER_UPLOADED) { data ->
+                val fileUri = data.getString("fileUri") ?: return@onCommand
+                val fileName = data.getString("fileName") ?: return@onCommand
+                val isImage = data.getBoolean("isImage", false)
+                val fileSize = data.getLong("fileSize", 0L)
+                registerUploadedContent(fileUri, fileName, isImage, fileSize)
+            }
+
+            onCommand(BridgeKeys.CLEAR_ENGINE_DATA) {
+                clearEngineData()
+            }
+
+            onQuery(BridgeKeys.GET_DOWNLOADED_FILE) {
+                // 查询引擎下载目录中已存在的文件，命中则直接返回字节（≤2MB），
+                // app 端预览免走一次网络下载。Binder 事务限制约 1MB，留余量。
+                val fileName = data.getString("fileName")
+                if (fileName.isNullOrBlank()) {
+                    reply(Bundle.EMPTY)
+                    return@onQuery
+                }
+                try {
+                    val ctx = appContext
+                    if (ctx != null) {
+                        val file = java.io.File(java.io.File(ctx.filesDir, "downloads"), fileName)
+                        if (file.isFile && file.length() in 1..2_000_000L) {
+                            reply(Bundle().apply {
+                                putByteArray("bytes", file.readBytes())
+                                putLong("size", file.length())
+                            })
+                            return@onQuery
+                        }
+                    }
+                    reply(Bundle.EMPTY)
+                } catch (e: Exception) {
+                    Logger.warn(TAG, "GET_DOWNLOADED_FILE failed: ${e.message}")
+                    reply(Bundle.EMPTY)
+                }
+            }
+
             onQuery(BridgeKeys.GET_HISTORY) {
-                val items = historyService?.getAll() ?: emptyList()
-                Logger.info(TAG, "GET_HISTORY: historyService=${if (historyService != null) "exists" else "null"}, items=${items.size}")
+                val items = getHistoryService()?.getAll() ?: emptyList()
+                Logger.info(TAG, "GET_HISTORY: items=${items.size}")
                 val itemsJson = Json.encodeToString(
                     ListSerializer(HistoryItem.serializer()), items
                 )
@@ -1818,7 +2051,7 @@ class SyncEngine private constructor() {
                 val offset = data.getInt("offset", 0)
                 val limit = data.getInt("limit", 50)
                 val searchText = data.getString("searchText")
-                val hs = historyService
+                val hs = getHistoryService()
                 if (hs != null) {
                     val pageItems = hs.getPaged(offset, limit, searchText)
                     val totalCount = hs.count(searchText)
@@ -1845,7 +2078,7 @@ class SyncEngine private constructor() {
                     reply(Bundle().apply { putBoolean("started", true) })
                     scope.launch {
                         val result = syncHistory(force = true, fullSync = false)
-                        val localCount = historyService?.getAll()?.size ?: 0
+                        val localCount = getHistoryService()?.getAll()?.size ?: 0
                         Logger.info(TAG, "FORCE_SYNC_HISTORY: success=${result.success}, fetched=${result.recordsFetched}, local=$localCount, error=${result.error}")
                         notifyHistorySyncCompleted(result.success, result.recordsFetched, localCount, result.error)
                     }
@@ -1860,14 +2093,14 @@ class SyncEngine private constructor() {
 
             onCommand(BridgeKeys.DELETE_HISTORY_ITEM) { data ->
                 val id = data.getString("id") ?: return@onCommand
-                historyService?.delete(id)
+                getHistoryService()?.delete(id)
                 Logger.info(TAG, "History item deleted: $id")
             }
 
             onCommand(BridgeKeys.UPDATE_HISTORY_ITEM) { data ->
                 val id = data.getString("id") ?: return@onCommand
                 val action = data.getString("action") ?: "toggleStar"
-                val hs = historyService ?: return@onCommand
+                val hs = getHistoryService() ?: return@onCommand
                 when (action) {
                     "toggleStar" -> {
                         hs.toggleStar(id)
@@ -1883,7 +2116,7 @@ class SyncEngine private constructor() {
             }
 
             onCommand(BridgeKeys.CLEAR_HISTORY) {
-                historyService?.clearAll()
+                getHistoryService()?.clearAll()
                 // 重置历史同步游标，强制下次全量同步
                 // 这样 mergeFromServerDtos 会从服务器恢复活跃记录
                 lastSyncTime = 0L

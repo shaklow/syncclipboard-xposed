@@ -21,6 +21,8 @@
     <string name="action_restart">重启</string>
     <string name="action_sync_now">立即同步</string>
     <string name="action_upload_now">立即上传</string>
+    <string name="action_upload_file">上传文件</string>
+    <string name="main_upload_file_desc">从本地选择文件上传到服务器</string>
     <string name="action_test_connection">测试连接</string>
     <string name="action_cancel">取消</string>
     <string name="action_save">保存</string>
@@ -162,6 +164,10 @@
     <string name="item_history_summary">查看已同步的剪贴板历史</string>
     <string name="item_log">日志</string>
     <string name="item_log_summary">查看同步引擎运行日志</string>
+    <string name="item_clean_engine_data">清理引擎数据</string>
+    <string name="item_clean_engine_data_summary">删除引擎侧历史、下载文件与临时文件</string>
+    <string name="clean_engine_data_confirm">将删除引擎侧所有数据（历史记录、下载文件、临时文件），不影响服务器上的数据。确定继续吗？</string>
+    <string name="clean_engine_data_done">引擎数据已清理</string>
     <string name="log_level_debug">调试</string>
     <string name="log_level_info">信息</string>
     <string name="log_level_warn">警告</string>
@@ -215,6 +221,21 @@
     <string name="history_selected_count">已选 %d 项</string>
     <string name="history_delete_selected">删除 (%d)</string>
     <string name="activity_transfer">传输队列</string>
+
+    <!-- 分享接收 -->
+    <string name="share_activity_label">上传到 SyncClipboard</string>
+    <string name="share_title">接收分享</string>
+    <string name="share_status_uploading">正在上传 %1$d/%2$d …</string>
+    <string name="share_status_done">上传完成（成功 %1$d，失败 %2$d）</string>
+    <string name="share_text_uploading">正在上传文本…</string>
+    <string name="share_empty">未找到可上传的内容</string>
+    <string name="share_timeout">上传超时，请检查网络和服务器设置</string>
+    <string name="share_waiting">等待中</string>
+    <string name="share_uploading">上传中</string>
+    <string name="share_done">已上传</string>
+    <string name="share_failed">上传失败</string>
+    <string name="share_finish">完成</string>
+    <string name="share_no_server">未配置服务器，请先添加同步服务器</string>
     <string name="transfer_empty">暂无传输任务</string>
     <string name="transfer_summary">进行中 %1$d / 共 %2$d</string>
     <string name="transfer_waiting">等待下载</string>

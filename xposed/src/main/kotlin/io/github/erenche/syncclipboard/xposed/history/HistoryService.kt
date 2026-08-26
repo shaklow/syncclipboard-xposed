@@ -31,7 +31,17 @@ class HistoryService(context: Context) {
     companion object {
         private const val TAG = "HistoryService"
         private const val MAX_ITEMS = 1000
+        /** 历史文件磁盘配额（字节）：超过后按最旧优先删除文件并标记对应记录 */
+        private const val MAX_DISK_BYTES = 200L * 1024 * 1024
+        /** 历史文件数量上限 */
+        private const val MAX_DISK_FILES = 400
+        /** enforceDiskLimit 最小执行间隔：避免高频写入时反复全目录扫描 */
+        private const val DISK_LIMIT_INTERVAL_MS = 60_000L
     }
+
+    /** 上次 enforceDiskLimit 执行时间（0 = 从未），批量写入时按间隔节流 */
+    @Volatile
+    private var lastDiskLimitCheck = 0L
 
     private val historyDir = File(context.filesDir, "history_files").apply { if (!exists()) mkdirs() }
 
@@ -106,6 +116,8 @@ class HistoryService(context: Context) {
                     fileUri = fileUri
                 )))
                 trimIfNeeded()
+                // 仅新增了文件才需要检查磁盘配额（文本不占历史目录）
+                if (fileUri != null) enforceDiskLimit()
             }
         }
     }
@@ -140,12 +152,15 @@ class HistoryService(context: Context) {
                     fileUri = downloadPath
                 )))
                 trimIfNeeded()
+                // 仅新增了文件才需要检查磁盘配额（文本不占历史目录）
+                if (downloadPath != null) enforceDiskLimit()
             }
         }
     }
 
     /**
      * 按服务器规则计算内容 hash（与 HashUtils.computeContentHash 对齐，额外支持 content:// URI）。
+     * 分块流式计算，避免大文件整块读入内存。
      */
     private fun computeHashForContent(content: ClipboardContent): String {
         if (content.type == ClipboardContentType.Text || !content.hasData ||
@@ -155,15 +170,16 @@ class HistoryService(context: Context) {
         val fileUri = content.fileUri!!
         val fileName = content.fileName!!
         return try {
-            val bytes: ByteArray? = if (fileUri.startsWith("content://")) {
+            if (fileUri.startsWith("content://")) {
                 val uri = android.net.Uri.parse(fileUri)
-                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                val input = ctx.contentResolver.openInputStream(uri)
+                if (input != null) HashUtils.computeFileHash(fileName, input)
+                else HashUtils.sha256(content.text)
             } else {
                 val f = java.io.File(fileUri)
-                if (f.exists()) f.readBytes() else null
+                if (f.exists()) HashUtils.computeFileHash(fileName, f)
+                else HashUtils.sha256(content.text)
             }
-            if (bytes != null) HashUtils.computeFileHash(fileName, bytes)
-            else HashUtils.sha256(content.text)
         } catch (e: Exception) {
             Logger.warn(TAG, "computeHashForContent: fallback to text hash: ${e.message}")
             HashUtils.sha256(content.text)
@@ -554,17 +570,28 @@ class HistoryService(context: Context) {
 
     // ─── 内部方法 ────────────────────────────────────────────────
 
-    /** 复制文件到持久化历史目录，返回新文件路径 */
+    /** 复制文件到持久化历史目录，返回新文件路径。
+     *  支持本地路径与 content:// URI（如分享上传时 app FileProvider 授权的 URI）。 */
     private fun copyToHistoryDir(sourceUri: String, fileName: String?, hash: String): String? {
         return try {
-            val src = File(sourceUri)
-            if (!src.exists()) {
-                Logger.warn(TAG, "Source file not exists (may be content:// URI): $sourceUri")
-                return null
-            }
             val name = fileName ?: "file_$hash"
             val dest = File(historyDir, "${hash}_${name}")
-            src.copyTo(dest, overwrite = true)
+            if (sourceUri.startsWith("content://")) {
+                val uri = android.net.Uri.parse(sourceUri)
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
+                } ?: run {
+                    Logger.warn(TAG, "openInputStream returned null for $sourceUri")
+                    return null
+                }
+            } else {
+                val src = File(sourceUri)
+                if (!src.exists()) {
+                    Logger.warn(TAG, "Source file not exists: $sourceUri")
+                    return null
+                }
+                src.copyTo(dest, overwrite = true)
+            }
             Logger.debug(TAG, "Copied to history dir: $sourceUri -> ${dest.absolutePath}")
             dest.absolutePath
         } catch (e: Exception) {
@@ -583,6 +610,55 @@ class HistoryService(context: Context) {
                 dao.softDeleteByIds(ids)
                 Logger.info(TAG, "Trimmed ${ids.size} old items")
             }
+        }
+    }
+
+    /**
+     * 历史文件磁盘配额：总大小/数量超限时，按最后修改时间从旧到新删除文件，
+     * 并软删除对应历史记录（避免 UI 残留"有文件但文件丢失"的空壳）。
+     * 60s 节流：批量推送/同步时不会每条记录都全目录扫描。
+     */
+    fun enforceDiskLimit() {
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            if (now - lastDiskLimitCheck < DISK_LIMIT_INTERVAL_MS) return
+            lastDiskLimitCheck = now
+        }
+        val files = historyDir.listFiles()?.filter { it.isFile } ?: return
+        var total = files.sumOf { it.length() }
+        var count = files.size
+        if (total <= MAX_DISK_BYTES && count <= MAX_DISK_FILES) return
+        val sorted = files.sortedBy { it.lastModified() }
+        var removed = 0
+        for (file in sorted) {
+            if (total <= MAX_DISK_BYTES && count <= MAX_DISK_FILES) break
+            val hash = file.name.substringBefore('_')
+            // 删除前记录大小：file.delete() 后 length() 返回 0，total 将无法递减
+            val fileLen = file.length()
+            try {
+                val item = dao.getByProfileHash(hash)?.toModel()
+                if (item != null && !item.isDeleted) {
+                    // 与 delete() 一致：已同步记录标记 NeedSync，下次同步推送删除
+                    val newStatus = if (item.syncStatus == HistorySyncStatus.Synced) {
+                        HistorySyncStatus.NeedSync
+                    } else item.syncStatus
+                    dao.upsert(HistoryItemEntity.from(item.copy(
+                        isDeleted = true,
+                        syncStatus = newStatus,
+                        lastModified = System.currentTimeMillis()
+                    )))
+                }
+            } catch (e: Exception) {
+                Logger.warn(TAG, "enforceDiskLimit: failed to mark ${file.name}: ${e.message}")
+            }
+            if (file.delete()) {
+                total -= fileLen
+                count -= 1
+                removed++
+            }
+        }
+        if (removed > 0) {
+            Logger.info(TAG, "enforceDiskLimit: removed $removed file(s), remaining bytes=$total")
         }
     }
 

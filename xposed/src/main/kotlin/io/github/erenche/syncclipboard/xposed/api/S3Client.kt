@@ -104,7 +104,7 @@ class S3Client(
         method: HttpMethod,
         objectKey: String,
         queryString: String = "",
-        body: ByteArray? = null,
+        body: Any? = null,
         contentType: String? = null
     ): HttpResponse {
         // 构建完整对象 key（含 prefix）
@@ -289,25 +289,32 @@ class S3Client(
         return destinationPath
     }
 
-    override suspend fun putFile(fileName: String, filePath: String, onProgress: ((Float) -> Unit)?) {
+    override suspend fun putFile(fileName: String, filePath: String, onProgress: ((Long, Long) -> Unit)?) {
         val file = File(filePath)
         if (!file.exists()) throw IllegalStateException("File not found: $filePath")
 
+        // 分块流式上传：按块读取并上报真实字节进度
+        val total = file.length()
+        val body = CountingFileContent(file, null) { sent ->
+            onProgress?.invoke(sent, total)
+        }
+        onProgress?.invoke(0L, total)
         val response = sendSignedRequest(
             method = HttpMethod.Put,
             objectKey = "$FILE_FOLDER/$fileName",
-            body = file.readBytes()
+            body = body
         )
         if (!response.status.isSuccess()) {
             val errBody = try { response.bodyAsText() } catch (_: Exception) { "" }
             throw IllegalStateException("S3 putFile failed: ${response.status.value} $errBody")
         }
+        onProgress?.invoke(total, total)
         Logger.info(TAG, "File uploaded to S3: $fileName")
     }
 
-    override suspend fun putContent(content: ClipboardContent) {
+    override suspend fun putContent(content: ClipboardContent, onProgress: ((Long, Long) -> Unit)?) {
         if (content.hasData && content.fileUri != null && content.fileName != null) {
-            putFile(content.fileName!!, content.fileUri!!)
+            putFile(content.fileName!!, content.fileUri!!, onProgress)
         }
 
         val profile = ProfileDto(
