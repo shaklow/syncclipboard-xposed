@@ -26,13 +26,15 @@ interface SyncClipboardApi {
     /** 下载文件到指定路径 */
     suspend fun downloadFile(fileName: String, destinationPath: String, onProgress: ((Float) -> Unit)? = null): String
 
-    /** 上传文件 */
-    suspend fun putFile(fileName: String, filePath: String, onProgress: ((Float) -> Unit)? = null)
+    /** 上传文件。
+     *  @param onProgress 字节级上传进度回调（sentBytes, totalBytes），totalBytes 未知时为 0 */
+    suspend fun putFile(fileName: String, filePath: String, onProgress: ((Long, Long) -> Unit)? = null)
 
     /**
-     * 上传剪贴板内容（先上传数据文件，再上传配置）
+     * 上传剪贴板内容（先上传数据文件，再上传配置）。
+     *  @param onProgress 文件字节级上传进度（sentBytes, totalBytes），仅文件类型时产生
      */
-    suspend fun putContent(content: ClipboardContent)
+    suspend fun putContent(content: ClipboardContent, onProgress: ((Long, Long) -> Unit)? = null)
 
     /**
      * 查询服务器历史记录（原项目 `POST /api/history/query`）。

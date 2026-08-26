@@ -142,26 +142,32 @@ class SyncClipboardHttpClient(
         return destinationPath
     }
 
-    override suspend fun putFile(fileName: String, filePath: String, onProgress: ((Float) -> Unit)?) {
+    override suspend fun putFile(fileName: String, filePath: String, onProgress: ((Long, Long) -> Unit)?) {
         val file = File(filePath)
         if (!file.exists()) throw IllegalStateException("File not found: $filePath")
 
-        // Upload via multipart or raw bytes depending on server implementation
+        // 分块流式上传：按块读取并上报真实字节进度（onUpload 对 OkHttp 引擎只在结尾回调一次）
+        val total = file.length()
+        val body = CountingFileContent(file, ContentType.Application.OctetStream) { sent ->
+            onProgress?.invoke(sent, total)
+        }
         client.put("$baseUrl$FILE_ENDPOINT${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}") {
             if (username != null && password != null) {
                 header(HttpHeaders.Authorization, buildAuthHeader())
             }
-            // 流式上传：直接以 File 作为 body，避免大文件整体读入内存
-            setBody(file)
+            setBody(body)
         }
     }
 
-    override suspend fun putContent(content: ClipboardContent) {
-        // 如果有文件数据，先上传文件
+    override suspend fun putContent(content: ClipboardContent, onProgress: ((Long, Long) -> Unit)?) {
+        // 如果有文件数据，先上传文件（引擎侧已把 content:// 转为本地临时路径）
         if (content.hasData && content.fileUri != null && content.fileName != null) {
             val name = content.fileName!!
             val uri = content.fileUri!!
-            putFile(name, uri)
+            val fileLen = runCatching { File(uri).length() }.getOrDefault(content.fileSize ?: 0L)
+            onProgress?.invoke(0L, fileLen)
+            putFile(name, uri) { sent, total -> onProgress?.invoke(sent, total) }
+            onProgress?.invoke(fileLen, fileLen)
         }
 
         // 计算 profile hash

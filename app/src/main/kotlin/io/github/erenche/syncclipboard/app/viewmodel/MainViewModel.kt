@@ -234,8 +234,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 通过 ServerApi 下载远程文件到 app cacheDir，按 hash 缓存文件名 */
-    private fun downloadRemoteFile(profile: ProfileDto): File? {
+    /** 通过 ServerApi 下载远程文件到 app cacheDir，按 hash 缓存文件名。
+     *  优先从引擎下载目录获取（引擎已下载过则免走网络），未命中再走网络。 */
+    private suspend fun downloadRemoteFile(profile: ProfileDto): File? {
         return try {
             val config = io.github.erenche.syncclipboard.common.Prefs.loadConfig(app)
             val server = config.servers.getOrNull(config.activeServerIndex)
@@ -252,6 +253,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Logger.info("MainViewModel", "Reusing cached remote file: ${destFile.name}")
                 return destFile
             }
+            // 引擎已下载过该文件：直接取字节写入本地，省一次网络下载（限 2MB）
+            val engineBytes = fetchEngineDownloadedFile(profile.dataName!!)
+            if (engineBytes != null) {
+                destFile.writeBytes(engineBytes)
+                Logger.info("MainViewModel", "Reused engine-downloaded file: ${destFile.name}, size=${engineBytes.size}")
+                return destFile
+            }
             val api = ServerApi(server)
             val result = when (server.type) {
                 ServerType.s3 -> api.downloadFileS3(profile.dataName!!, destFile)
@@ -263,8 +271,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Logger.warn("MainViewModel", "Failed to download remote file: ${profile.dataName}")
             }
             result
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Logger.error("MainViewModel", "downloadRemoteFile error: ${e.message}", e)
+            null
+        }
+    }
+
+    /** 向引擎查询已下载的文件字节（≤2MB），未命中返回 null */
+    private suspend fun fetchEngineDownloadedFile(fileName: String): ByteArray? {
+        return try {
+            val bundle = SyncClipboardBridge.with(app)
+                .to("com.android.systemui")
+                .key(BridgeKeys.GET_DOWNLOADED_FILE)
+                .payload(android.os.Bundle().apply { putString("fileName", fileName) })
+                .await(timeout = 4000)
+            val bytes = bundle.getByteArray("bytes")
+            if (bytes != null && bytes.isNotEmpty()) bytes else null
+        } catch (e: Exception) {
+            Logger.debug("MainViewModel", "fetchEngineDownloadedFile miss: ${e.message}")
             null
         }
     }

@@ -88,7 +88,7 @@ object BridgeKeys {
     /** 手动操作结果反馈事件（同步/上传） */
     const val EVENT_ACTION_RESULT = "event_action_result"
 
-    /** 传输进度事件 */
+    /** 传输进度事件（保留兼容；分享上传已改由 App 进程直接上报，不再使用） */
     const val EVENT_TRANSFER_PROGRESS = "event_transfer_progress"
 
     /** 历史同步完成事件（异步通知，syncHistory 完成后推送） */
@@ -100,7 +100,23 @@ object BridgeKeys {
     /** 清空日志缓冲区 */
     const val CLEAR_LOGS = "clear_logs"
 
-    // ─── 文本直传（app → xposed 进程）────────────────────────
+    // ─── 文本直传（app → xposed 进程）──────────────────────────
     /** 直接上传一段文本（如短信验证码）到服务器 */
     const val UPLOAD_TEXT = "upload_text"
+
+    /**
+     * App 进程上传文件成功后向引擎登记（分享/主页"上传文件"）。
+     * payload: fileUri（app FileProvider 的 content:// URI，已授权 SystemUI 读取）、
+     * fileName、isImage、fileSize。
+     * 引擎据此写入历史记录、更新远端缓存（避免轮询误判重复下载）。
+     */
+    const val REGISTER_UPLOADED = "register_uploaded"
+
+    // ─── 引擎数据管理（app → xposed 进程）──────────────────────
+    /** 清理引擎本地数据（历史库/历史文件/下载目录/上传临时文件） */
+    const val CLEAR_ENGINE_DATA = "clear_engine_data"
+
+    /** 查询引擎已下载的文件（避免 app 重复走网络下载）。
+     *  payload: fileName；返回 bytes（byte[]，≤2MB）+ size，无则空 Bundle */
+    const val GET_DOWNLOADED_FILE = "get_downloaded_file"
 }

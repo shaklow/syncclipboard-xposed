@@ -119,17 +119,22 @@ class WebDAVClient(
         return destinationPath
     }
 
-    override suspend fun putFile(fileName: String, filePath: String, onProgress: ((Float) -> Unit)?) {
+    override suspend fun putFile(fileName: String, filePath: String, onProgress: ((Long, Long) -> Unit)?) {
         val file = File(filePath)
         if (!file.exists()) throw IllegalStateException("File not found: $filePath")
 
         // 确保远程目录存在（MKCOL，已存在则忽略 405）
         ensureDataDirectoryExists()
 
+        // 分块流式上传：按块读取并上报真实字节进度
+        val total = file.length()
+        val body = CountingFileContent(file, ContentType.Application.OctetStream) { sent ->
+            onProgress?.invoke(sent, total)
+        }
         val encodedName = URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
         client.put("$baseUrl/$DATA_DIR/$encodedName") {
             header(HttpHeaders.Authorization, buildAuthHeader())
-            setBody(file.readBytes())
+            setBody(body)
         }
     }
 
@@ -152,11 +157,14 @@ class WebDAVClient(
         }
     }
 
-    override suspend fun putContent(content: ClipboardContent) {
+    override suspend fun putContent(content: ClipboardContent, onProgress: ((Long, Long) -> Unit)?) {
         if (content.hasData && content.fileUri != null && content.fileName != null) {
             val name = content.fileName!!
             val uri = content.fileUri!!
-            putFile(name, uri)
+            val fileLen = runCatching { File(uri).length() }.getOrDefault(content.fileSize ?: 0L)
+            onProgress?.invoke(0L, fileLen)
+            putFile(name, uri) { sent, total -> onProgress?.invoke(sent, total) }
+            onProgress?.invoke(fileLen, fileLen)
         }
 
         val profile = ProfileDto(

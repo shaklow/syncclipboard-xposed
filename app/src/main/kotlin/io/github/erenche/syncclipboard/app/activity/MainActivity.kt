@@ -8,7 +8,9 @@ import android.content.IntentFilter
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -284,6 +286,24 @@ fun SyncControlsCard(viewModel: MainViewModel) {
     val toast by viewModel.toast.collectAsState()
     val context = LocalContext.current
 
+    // "上传文件"：系统文件选择器 → 选中后交给 ShareActivity 上传（复用上传进度界面）
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val activity = context as? Activity
+            if (activity == null || activity.isFinishing) return@rememberLauncherForActivityResult
+            val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+            activity.startActivity(
+                Intent(activity, ShareActivity::class.java).apply {
+                    putExtra(ShareActivity.EXTRA_FILE_URI, uri.toString())
+                    putExtra(ShareActivity.EXTRA_FILE_MIME, mime)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            )
+        }
+    }
+
     LaunchedEffect(toast) {
         toast?.let { msg ->
             android.widget.Toast.makeText(
@@ -305,6 +325,11 @@ fun SyncControlsCard(viewModel: MainViewModel) {
             title = stringResource(R.string.action_upload_now),
             summary = if (isBusy) "..." else stringResource(R.string.main_upload_now_desc),
             onClick = { if (!isBusy) viewModel.uploadNow() }
+        )
+        ArrowPreference(
+            title = stringResource(R.string.action_upload_file),
+            summary = stringResource(R.string.main_upload_file_desc),
+            onClick = { filePicker.launch(arrayOf("*/*")) }
         )
     }
 }

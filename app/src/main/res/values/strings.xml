@@ -21,6 +21,8 @@
     <string name="action_restart">Restart</string>
     <string name="action_sync_now">Sync Now</string>
     <string name="action_upload_now">Upload Now</string>
+    <string name="action_upload_file">Upload File</string>
+    <string name="main_upload_file_desc">Pick a file from device and upload</string>
     <string name="action_test_connection">Test Connection</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_save">Save</string>
@@ -162,6 +164,10 @@
     <string name="item_history_summary">View synced clipboard history</string>
     <string name="item_log">Logs</string>
     <string name="item_log_summary">View sync engine logs</string>
+    <string name="item_clean_engine_data">Clean Engine Data</string>
+    <string name="item_clean_engine_data_summary">Delete engine-side history, downloads and cache</string>
+    <string name="clean_engine_data_confirm">This will delete all engine-side data (history, downloaded files, temp files). The server data is not affected. Continue?</string>
+    <string name="clean_engine_data_done">Engine data cleaned</string>
     <string name="log_level_debug">Debug</string>
     <string name="log_level_info">Info</string>
     <string name="log_level_warn">Warn</string>
@@ -217,6 +223,21 @@
     <string name="history_selected_count">%d selected</string>
     <string name="history_delete_selected">Delete (%d)</string>
     <string name="activity_transfer">Transfers</string>
+
+    <!-- 分享接收 -->
+    <string name="share_activity_label">Upload to SyncClipboard</string>
+    <string name="share_title">Receiving Share</string>
+    <string name="share_status_uploading">Uploading %1$d/%2$d …</string>
+    <string name="share_status_done">Done (%1$d ok, %2$d failed)</string>
+    <string name="share_text_uploading">Uploading text…</string>
+    <string name="share_empty">No uploadable content found</string>
+    <string name="share_timeout">Upload timed out. Please check the network and server settings</string>
+    <string name="share_waiting">Waiting</string>
+    <string name="share_uploading">Uploading</string>
+    <string name="share_done">Uploaded</string>
+    <string name="share_failed">Failed</string>
+    <string name="share_finish">Done</string>
+    <string name="share_no_server">No server configured. Please configure a sync server first</string>
     <string name="transfer_empty">No downloads in queue</string>
     <string name="transfer_summary">%1$d active / %2$d total</string>
     <string name="transfer_waiting">Waiting</string>
