@@ -27,10 +27,13 @@ room = "2.7.1"
 ksp = "2.3.11"
 
 # MIUIX UI
-miuixUI = "0.9.1"
-miuixIcons = "0.9.1"
-miuixPreference = "0.9.1"
-miuixBlur = "0.9.1"
+miuixUI = "0.9.3"
+miuixIcons = "0.9.3"
+miuixPreference = "0.9.3"
+miuixBlur = "0.9.3"
+
+# Compose Material Icons（底栏图标）
+materialIconsExtended = "1.7.8"
 
 # LSPosed
 xposed-api = "101.0.1"
@@ -83,6 +86,9 @@ miuix-android = { module = "top.yukonga.miuix.kmp:miuix-ui-android", version.ref
 miuix-preference = { module = "top.yukonga.miuix.kmp:miuix-preference-android", version.ref = "miuixPreference" }
 miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons-android", version.ref = "miuixIcons" }
 miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur-android", version.ref = "miuixBlur" }
+
+# ===== Material Icons =====
+material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
 
 # ===== Testing =====
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }

@@ -8,22 +8,41 @@ import android.content.IntentFilter
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -31,21 +50,32 @@ import androidx.core.content.FileProvider
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.SyncClipboardApp
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
+import io.github.erenche.syncclipboard.app.compose.theme.AppTheme
+import io.github.erenche.syncclipboard.app.compose.theme.CurrentThemeConfigs
+import io.github.erenche.syncclipboard.app.component.BlurredBar
+import io.github.erenche.syncclipboard.app.component.FloatingBottomBar
+import io.github.erenche.syncclipboard.app.component.FloatingBottomBarItem
+import io.github.erenche.syncclipboard.app.component.rememberBlurBackdrop
+import io.github.erenche.syncclipboard.app.component.rememberMainPagerState
+import io.github.erenche.syncclipboard.app.util.UiState
 import io.github.erenche.syncclipboard.app.viewmodel.MainViewModel
+import io.github.erenche.syncclipboard.app.viewmodel.UpdateInfo
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.BridgeSecurity
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.model.AppConfig
 import io.github.erenche.syncclipboard.common.model.ClipboardContentType
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import top.yukonga.miuix.kmp.basic.*
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.shader.isRenderEffectSupported
 import top.yukonga.miuix.kmp.window.WindowListPopup
 import top.yukonga.miuix.kmp.basic.ListPopupColumn
 import top.yukonga.miuix.kmp.basic.ListPopupDefaults
@@ -113,6 +143,19 @@ private fun restartSystemUI(context: Context) {
     }
 }
 
+/** 底栏导航 tab 定义 */
+private data class BottomTab(
+    val labelRes: Int,
+    val icon: ImageVector,
+)
+
+private val bottomTabs = listOf(
+    BottomTab(R.string.nav_home, Icons.Rounded.Home),
+    BottomTab(R.string.nav_history, Icons.Rounded.History),
+    BottomTab(R.string.nav_server, Icons.Rounded.Cloud),
+    BottomTab(R.string.nav_settings, Icons.Rounded.Settings),
+)
+
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
@@ -130,6 +173,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 .send()
         } catch (_: Exception) {}
         viewModel.refreshRemoteContent()
+        viewModel.checkUpdate()
     }
 
     // 监听内容变化广播，只读取缓存刷新 UI（不触发服务端拉取，避免循环）
@@ -149,7 +193,139 @@ fun MainScreen(viewModel: MainViewModel) {
         onDispose { context.unregisterReceiver(receiver) }
     }
 
+    val floatingBar = UiState.floatingBottomBar
+    // 液态玻璃：仅悬浮底栏生效
+    val barBlur = UiState.bottomBarBlur && isRenderEffectSupported()
+    // 服务器编辑页打开时隐藏底栏并禁用滑动切换
+    val serverEditing = UiState.serverEditing
+
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { bottomTabs.size })
+    val mainState = rememberMainPagerState(pagerState)
+
+    // 滑动切换结束后回写选中页
+    LaunchedEffect(pagerState.currentPage) {
+        mainState.syncPage()
+    }
+    fun selectTab(index: Int) {
+        mainState.animateToPage(index)
+    }
+
+    // 非 Home tab 按返回键回到主页
+    BackHandler(enabled = mainState.selectedPage != 0) {
+        selectTab(0)
+    }
+
+    AppTheme {
+        val surfaceColor = MiuixTheme.colorScheme.surface
+        // 常规 NavigationBar 的模糊背景
+        val blurBackdrop = rememberBlurBackdrop(UiState.blur)
+        // 悬浮底栏的液态玻璃背景
+        val backdrop = rememberLayerBackdrop {
+            drawRect(surfaceColor)
+            drawContent()
+        }
+
+        val bottomBar: @Composable () -> Unit = {
+            // 编辑页打开时底栏整体滑出隐藏
+            AnimatedVisibility(
+                visible = !serverEditing,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()
+            ) {
+                if (!floatingBar) {
+                BlurredBar(blurBackdrop) {
+                    NavigationBar(
+                        color = if (blurBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface
+                    ) {
+                        bottomTabs.forEachIndexed { index, tab ->
+                            NavigationBarItem(
+                                modifier = Modifier.weight(1f),
+                                icon = tab.icon,
+                                label = stringResource(tab.labelRes),
+                                selected = mainState.selectedPage == index,
+                                onClick = { selectTab(index) },
+                            )
+                        }
+                    }
+                }
+            } else {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    FloatingBottomBar(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {},
+                            )
+                            .padding(
+                                bottom = 12.dp + WindowInsets.navigationBars
+                                    .asPaddingValues().calculateBottomPadding()
+                            ),
+                        selectedIndex = { mainState.selectedPage },
+                        onSelected = { index -> selectTab(index) },
+                        backdrop = backdrop,
+                        tabsCount = bottomTabs.size,
+                        isBlurEnabled = barBlur,
+                    ) {
+                        bottomTabs.forEachIndexed { index, tab ->
+                            FloatingBottomBarItem(
+                                onClick = { selectTab(index) },
+                                modifier = Modifier.defaultMinSize(minWidth = 76.dp)
+                            ) {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = stringResource(tab.labelRes),
+                                )
+                                Text(
+                                    text = stringResource(tab.labelRes),
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Visible
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            }
+        }
+
+        Scaffold(bottomBar = { bottomBar() }) { innerPadding ->
+            val bottomPad = innerPadding.calculateBottomPadding()
+            Box(
+                modifier = if (blurBackdrop != null) Modifier.layerBackdrop(blurBackdrop) else Modifier
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    userScrollEnabled = !serverEditing,
+                    modifier = Modifier
+                        .then(
+                            if (floatingBar && barBlur) Modifier.layerBackdrop(backdrop) else Modifier
+                        ),
+                    beyondViewportPageCount = bottomTabs.size - 1,
+                    overscrollEffect = null,
+                ) { page ->
+                    when (page) {
+                        0 -> HomeTab(viewModel, bottomPad)
+                        1 -> HistoryScreen(bottomPadding = bottomPad, embedded = true)
+                        2 -> ServerConfigScreen(bottomPadding = bottomPad, canBack = false)
+                        3 -> SettingsScreen(bottomPadding = bottomPad, canBack = false)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 主页 tab：状态 / 远程内容 / 同步操作 / 更多入口 */
+@Composable
+private fun HomeTab(viewModel: MainViewModel, bottomPadding: Dp) {
+    val context = LocalContext.current
     val isLoadingRemote by viewModel.isLoadingRemote
+    val isActive by viewModel.isModuleActive
     var showRestartPopup by remember { mutableStateOf(false) }
     val restartItems = listOf(
         stringResource(R.string.action_restart_app),
@@ -163,6 +339,7 @@ fun MainScreen(viewModel: MainViewModel) {
             viewModel.refreshStatus()
             viewModel.refreshRemoteContent()
         },
+        bottomPadding = bottomPadding,
         actions = {
             IconButton(
                 onClick = { showRestartPopup = true },
@@ -201,38 +378,73 @@ fun MainScreen(viewModel: MainViewModel) {
             )
         }
     ) {
-        item("status") { StatusCard(viewModel) }
-        item("remote_content") { RemoteContentCard(viewModel) }
-        item("sync_controls") { SyncControlsCard(viewModel) }
-        item("history") {
-            Card(
-                modifier = Modifier.padding(
-                    start = 16.dp, top = 16.dp, end = 16.dp
-                ).fillMaxWidth()
+        item("status") {
+            StatusCard(viewModel)
+            // 模块激活且有新版本时显示更新提示
+            val update by viewModel.updateInfo
+            AnimatedVisibility(
+                visible = isActive && update != null,
+                enter = fadeIn() + expandVertically(),
+                exit = shrinkVertically() + fadeOut()
             ) {
-                ArrowPreference(
-                    title = stringResource(R.string.item_history),
-                    summary = stringResource(R.string.item_history_summary),
-                    onClick = {
-                        context.startActivity(Intent(context, HistoryActivity::class.java))
+                UpdateCard(updateInfo = update) {
+                    update?.releaseUrl?.let { url ->
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                     }
-                )
+                }
             }
         }
-        item("more") {
+        item("remote_content") { RemoteContentCard(viewModel) }
+        item("sync_controls") { SyncControlsCard(viewModel) }
+        item("log") {
             Card(
                 modifier = Modifier.padding(
                     start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp
                 ).fillMaxWidth()
             ) {
                 ArrowPreference(
-                    title = stringResource(R.string.item_more),
-                    summary = stringResource(R.string.item_more_summary),
+                    title = stringResource(R.string.item_log),
+                    summary = stringResource(R.string.item_log_summary),
                     onClick = {
-                        context.startActivity(Intent(context, MoreActivity::class.java))
+                        context.startActivity(Intent(context, LogActivity::class.java))
                     }
                 )
             }
+        }
+    }
+}
+
+/** 新版本提示卡片（点击跳转 GitHub 最新 release） */
+@Composable
+private fun UpdateCard(updateInfo: UpdateInfo?, onClick: () -> Unit) {
+    val isDark = CurrentThemeConfigs.isDark
+    Card(
+        modifier = Modifier
+            .padding(start = 16.dp, top = 12.dp, end = 16.dp)
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardColors(
+            color = if (isDark) Color(0xFF3E2F1B) else Color(0xFFFFF0DB),
+            contentColor = Color(0xFFF5A623)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.update_available, updateInfo?.versionName ?: ""),
+                fontSize = 14.sp,
+                color = Color(0xFFF5A623)
+            )
+            Icon(
+                imageVector = MiuixIcons.Info,
+                contentDescription = null,
+                tint = Color(0xFFF5A623)
+            )
         }
     }
 }

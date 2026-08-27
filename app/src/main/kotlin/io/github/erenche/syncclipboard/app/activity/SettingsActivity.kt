@@ -1,6 +1,7 @@
 package io.github.erenche.syncclipboard.app.activity
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -32,9 +34,11 @@ import io.github.erenche.syncclipboard.app.util.AppLangUtils
 import io.github.erenche.syncclipboard.app.util.AppThemeUtils
 import io.github.erenche.syncclipboard.app.util.ThemeColor
 import io.github.erenche.syncclipboard.app.util.ThemeState
+import io.github.erenche.syncclipboard.app.util.UiState
 import io.github.erenche.syncclipboard.app.util.resolveLanguageName
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
+import io.github.erenche.syncclipboard.common.PackageNames
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.extensions.defaultSharedPreferences
 import io.github.erenche.syncclipboard.common.model.AppConfig
@@ -45,10 +49,12 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SpinnerEntry
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.icon.extended.Translate
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.OverlaySpinnerPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
@@ -80,16 +86,20 @@ private fun restartApp(activity: Activity?) {
 }
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    bottomPadding: Dp = 0.dp,
+    canBack: Boolean = true,
+) {
     val context = LocalContext.current
     val activity = context as? Activity
 
     AppToolBarListContainer(
         title = stringResource(R.string.activity_settings),
-        canBack = true,
-        onBack = { activity?.finish() }
+        canBack = canBack,
+        onBack = { activity?.finish() },
+        bottomPadding = bottomPadding
     ) {
-        // 1. 主题设置
+        // 1. 主题与界面设置（含底栏样式）
         item("theme") {
             ThemeSettingsCard(context, activity)
         }
@@ -109,19 +119,36 @@ fun SettingsScreen() {
             HistorySettingsCard()
         }
 
-        // 6. 日志设置
+        // 5. 日志设置
         item("logging") {
             LoggingSettingsCard(context)
         }
 
-        // 7. 自动保存设置
+        // 6. 自动保存设置
         item("auto_save") {
             AutoSaveSettingsCard(context)
         }
 
-        // 8. 缓存管理
+        // 7. 存储清理（缓存 + 引擎数据）
         item("cache") {
-            CacheSettingsCard(context)
+            StorageSettingsCard(context)
+        }
+
+        // 8. 关于
+        item("about") {
+            Card(
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = stringResource(R.string.item_about_app),
+                    summary = stringResource(R.string.item_about_app_summary),
+                    onClick = {
+                        context.startActivity(Intent(context, AboutActivity::class.java))
+                    }
+                )
+            }
         }
     }
 }
@@ -213,6 +240,33 @@ fun ThemeSettingsCard(context: android.content.Context, activity: Activity?) {
                 onCheckedChange = {
                     ThemeState.updateMonet(context, it)
                 }
+            )
+        }
+
+        // ── 底栏样式 ──
+        SwitchPreference(
+            title = stringResource(R.string.setting_blur),
+            summary = stringResource(R.string.setting_blur_summary),
+            checked = UiState.blur,
+            onCheckedChange = { UiState.updateBlur(context, it) }
+        )
+        SwitchPreference(
+            title = stringResource(R.string.setting_floating_bottom_bar),
+            summary = stringResource(R.string.setting_floating_bottom_bar_summary),
+            checked = UiState.floatingBottomBar,
+            onCheckedChange = { UiState.updateFloatingBottomBar(context, it) }
+        )
+        // 液态玻璃仅在悬浮底栏开启时可用
+        AnimatedVisibility(
+            visible = UiState.floatingBottomBar,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            SwitchPreference(
+                title = stringResource(R.string.setting_bottom_bar_blur),
+                summary = stringResource(R.string.setting_bottom_bar_blur_summary),
+                checked = UiState.bottomBarBlur,
+                onCheckedChange = { UiState.updateBottomBarBlur(context, it) }
             )
         }
     }
@@ -366,23 +420,31 @@ fun LanguageCard(context: android.content.Context, activity: Activity?) {
 // ─── 同步设置（含后台子开关与轮询设置）─────────────────────────────
 @Composable
 fun SyncSettingsCard(context: android.content.Context) {
-    var autoSync by remember { mutableStateOf(Prefs.loadConfig(context).enableAutoSync) }
-    var bgUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableBackgroundUpload) }
-    var bgDownload by remember { mutableStateOf(Prefs.loadConfig(context).enableBackgroundDownload) }
-    var stopOnBattery by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnBatterySaver) }
-    var stopOnScreenOff by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnScreenOff) }
-    var stopOnMobileData by remember { mutableStateOf(Prefs.loadConfig(context).disconnectOnMobileData) }
-    var pollingIntervalSec by remember { mutableStateOf(Prefs.loadConfig(context).pollingIntervalSec.coerceAtLeast(1)) }
-    var screenOffDelaySec by remember { mutableStateOf(Prefs.loadConfig(context).screenOffDisconnectDelaySec) }
-    var smsUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableSmsUpload) }
-    var notifUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableNotificationUpload) }
+    // 响应式配置：服务器切换等外部修改实时刷新本卡片
+    var config by remember { mutableStateOf(Prefs.loadConfig(context)) }
+    DisposableEffect(context) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == Prefs.KEY_CONFIG) config = Prefs.loadConfig(context)
+        }
+        Prefs.registerConfigListener(context, listener)
+        onDispose { Prefs.unregisterConfigListener(context, listener) }
+    }
+
+    val autoSync = config.enableAutoSync
+    val bgUpload = config.enableBackgroundUpload
+    val bgDownload = config.enableBackgroundDownload
+    val stopOnBattery = config.stopPollingOnBatterySaver
+    val stopOnScreenOff = config.stopPollingOnScreenOff
+    val stopOnMobileData = config.disconnectOnMobileData
+    val pollingIntervalSec = config.pollingIntervalSec.coerceAtLeast(1)
+    val screenOffDelaySec = config.screenOffDisconnectDelaySec
+    val smsUpload = config.enableSmsUpload
+    val notifUpload = config.enableNotificationUpload
 
     // 当前激活服务器类型：SyncClipboard 官方服务器显示息屏断开/省电断开设置，
     // 其他模式（WebDAV/S3）保留轮询间隔与息屏/省电停止轮询
-    val isSyncClipboardServer = remember {
-        val cfg = Prefs.loadConfig(context)
-        cfg.servers.getOrNull(cfg.activeServerIndex)?.type == io.github.erenche.syncclipboard.common.model.ServerType.syncclipboard
-    }
+    val isSyncClipboardServer =
+        config.servers.getOrNull(config.activeServerIndex)?.type == io.github.erenche.syncclipboard.common.model.ServerType.syncclipboard
 
     val intervalOptions = remember { listOf(1, 3, 5, 10, 15, 30, 60, 120, 300, 600) }
     val intervalLabels = remember(intervalOptions) {
@@ -396,6 +458,7 @@ fun SyncSettingsCard(context: android.content.Context) {
     }
 
     fun pushConfig(newConfig: AppConfig) {
+        config = newConfig
         try {
             Prefs.saveConfig(context, newConfig)
             val configJson = Json.encodeToString(AppConfig.serializer(), newConfig)
@@ -428,16 +491,7 @@ fun SyncSettingsCard(context: android.content.Context) {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            smsUpload = true
-            val newCfg = Prefs.loadConfig(context).copy(enableSmsUpload = true)
-            try {
-                Prefs.saveConfig(context, newCfg)
-                val payload = android.os.Bundle().apply {
-                    putString("config", Json.encodeToString(AppConfig.serializer(), newCfg))
-                }
-                SyncClipboardBridge.with(context).to("com.android.systemui")
-                    .key(BridgeKeys.PUSH_CONFIG).payload(payload).send()
-            } catch (_: Exception) {}
+            pushConfig(config.copy(enableSmsUpload = true))
         }
         // 拒绝时保持开关关闭
     }
@@ -447,68 +501,52 @@ fun SyncSettingsCard(context: android.content.Context) {
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (isNotificationListenerEnabled()) {
-            notifUpload = true
-            pushConfig(Prefs.loadConfig(context).copy(enableNotificationUpload = true))
+            pushConfig(config.copy(enableNotificationUpload = true))
         }
         // 未授权则保持开关关闭
     }
 
     // 总开关：关闭→子开关一并关闭；打开→若两个子开关都关则默认都开
     fun toggleAutoSync(enabled: Boolean) {
-        autoSync = enabled
-        val config = Prefs.loadConfig(context)
         if (enabled) {
             val restoreUpload = bgUpload || bgDownload
             val newUpload = if (restoreUpload) bgUpload else true
             val newDownload = if (restoreUpload) bgDownload else true
-            bgUpload = newUpload
-            bgDownload = newDownload
             pushConfig(config.copy(enableAutoSync = true, enableBackgroundUpload = newUpload, enableBackgroundDownload = newDownload))
         } else {
-            bgUpload = false
-            bgDownload = false
             pushConfig(config.copy(enableAutoSync = false, enableBackgroundUpload = false, enableBackgroundDownload = false))
         }
     }
 
     // 子开关：当两个子开关都被关闭时，总开关自动关闭（双向联动）
     fun toggleBgUpload(enabled: Boolean) {
-        bgUpload = enabled
-        val config = Prefs.loadConfig(context)
-        val newAutoSync = if (!enabled && !bgDownload) { autoSync = false; false } else true
+        val newAutoSync = !(!enabled && !bgDownload)
         pushConfig(config.copy(enableBackgroundUpload = enabled, enableAutoSync = newAutoSync))
     }
 
     fun toggleBgDownload(enabled: Boolean) {
-        bgDownload = enabled
-        val config = Prefs.loadConfig(context)
-        val newAutoSync = if (!enabled && !bgUpload) { autoSync = false; false } else true
+        val newAutoSync = !(!enabled && !bgUpload)
         pushConfig(config.copy(enableBackgroundDownload = enabled, enableAutoSync = newAutoSync))
     }
 
     fun toggleStopOnBattery(enabled: Boolean) {
-        stopOnBattery = enabled
-        pushConfig(Prefs.loadConfig(context).copy(stopPollingOnBatterySaver = enabled))
+        pushConfig(config.copy(stopPollingOnBatterySaver = enabled))
     }
 
     fun toggleStopOnScreenOff(enabled: Boolean) {
-        stopOnScreenOff = enabled
-        pushConfig(Prefs.loadConfig(context).copy(stopPollingOnScreenOff = enabled))
+        pushConfig(config.copy(stopPollingOnScreenOff = enabled))
     }
 
     fun toggleStopOnMobileData(enabled: Boolean) {
-        stopOnMobileData = enabled
-        pushConfig(Prefs.loadConfig(context).copy(disconnectOnMobileData = enabled))
+        pushConfig(config.copy(disconnectOnMobileData = enabled))
     }
 
     fun updatePollingInterval(sec: Int) {
-        pollingIntervalSec = sec
-        pushConfig(Prefs.loadConfig(context).copy(pollingIntervalSec = sec))
+        pushConfig(config.copy(pollingIntervalSec = sec))
     }
 
     fun updateScreenOffDisconnectDelay(sec: Int) {
-        screenOffDelaySec = sec
-        pushConfig(Prefs.loadConfig(context).copy(screenOffDisconnectDelaySec = sec))
+        pushConfig(config.copy(screenOffDisconnectDelaySec = sec))
     }
 
     fun toggleSmsUpload(enabled: Boolean) {
@@ -517,22 +555,19 @@ fun SyncSettingsCard(context: android.content.Context) {
                 context, android.Manifest.permission.RECEIVE_SMS
             ) == PackageManager.PERMISSION_GRANTED
             if (hasPerm) {
-                smsUpload = true
-                pushConfig(Prefs.loadConfig(context).copy(enableSmsUpload = true))
+                pushConfig(config.copy(enableSmsUpload = true))
             } else {
                 smsPermissionLauncher.launch(android.Manifest.permission.RECEIVE_SMS)
             }
         } else {
-            smsUpload = false
-            pushConfig(Prefs.loadConfig(context).copy(enableSmsUpload = false))
+            pushConfig(config.copy(enableSmsUpload = false))
         }
     }
 
     fun toggleNotificationUpload(enabled: Boolean) {
         if (enabled) {
             if (isNotificationListenerEnabled()) {
-                notifUpload = true
-                pushConfig(Prefs.loadConfig(context).copy(enableNotificationUpload = true))
+                pushConfig(config.copy(enableNotificationUpload = true))
             } else {
                 // 跳转到系统"通知访问权限"设置页，用户授权后返回时由 launcher 回调核对状态
                 try {
@@ -543,8 +578,7 @@ fun SyncSettingsCard(context: android.content.Context) {
                 }
             }
         } else {
-            notifUpload = false
-            pushConfig(Prefs.loadConfig(context).copy(enableNotificationUpload = false))
+            pushConfig(config.copy(enableNotificationUpload = false))
         }
     }
 
@@ -839,16 +873,18 @@ fun AutoSaveSettingsCard(context: android.content.Context) {
     }
 }
 
-// ─── 缓存管理 ─────────────────────────────────────────────────
+// ─── 存储清理（缓存 + 引擎数据合并卡片）───────────────────────
 @Composable
-fun CacheSettingsCard(context: android.content.Context) {
+fun StorageSettingsCard(context: android.content.Context) {
     var cacheSize by remember { mutableStateOf(getCacheSize(context)) }
+    var showCleanupDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier
             .padding(start = 16.dp, top = 16.dp, end = 16.dp)
             .fillMaxWidth()
     ) {
+        // 清理缓存（app 侧预览文件等，无害操作）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -877,6 +913,47 @@ fun CacheSettingsCard(context: android.content.Context) {
             ) {
                 Text(text = stringResource(R.string.setting_cache_clear))
             }
+        }
+
+        // 清理引擎数据（引擎侧历史/下载/临时文件，破坏性操作需确认）
+        ArrowPreference(
+            title = stringResource(R.string.item_clean_engine_data),
+            summary = stringResource(R.string.item_clean_engine_data_summary),
+            onClick = { showCleanupDialog = true }
+        )
+    }
+
+    OverlayDialog(
+        show = showCleanupDialog,
+        title = stringResource(R.string.item_clean_engine_data),
+        summary = stringResource(R.string.clean_engine_data_confirm),
+        onDismissRequest = { showCleanupDialog = false }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            TextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = { showCleanupDialog = false },
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                text = stringResource(R.string.action_confirm),
+                onClick = {
+                    showCleanupDialog = false
+                    SyncClipboardBridge.with(context)
+                        .to(PackageNames.SYSTEM_UI)
+                        .key(BridgeKeys.CLEAR_ENGINE_DATA)
+                        .send()
+                    android.widget.Toast.makeText(
+                        context,
+                        R.string.clean_engine_data_done,
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

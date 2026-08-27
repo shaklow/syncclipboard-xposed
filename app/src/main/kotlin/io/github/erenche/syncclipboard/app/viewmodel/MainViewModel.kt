@@ -28,6 +28,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
 
+/** GitHub 最新 release 信息 */
+data class UpdateInfo(
+    val versionCode: Long,
+    val versionName: String,
+    val releaseUrl: String,
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app get() = getApplication<SyncClipboardApp>()
@@ -58,6 +65,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 是否正在加载远程内容 */
     private val _isLoadingRemote = mutableStateOf(false)
     val isLoadingRemote: State<Boolean> = _isLoadingRemote
+
+    /** GitHub 最新 release 信息（仅在有新版本时非空） */
+    private val _updateInfo = mutableStateOf<UpdateInfo?>(null)
+    val updateInfo: State<UpdateInfo?> = _updateInfo
 
     private val resultReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -105,6 +116,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearDownloadedState() {
         _downloadedFile.value = null
         downloadedHash = null
+    }
+
+    /** 检查 GitHub 最新 release，有新版本时更新 [updateInfo] */
+    fun checkUpdate() {
+        viewModelScope.launch {
+            _updateInfo.value = withContext(Dispatchers.IO) { fetchLatestRelease() }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun fetchLatestRelease(): UpdateInfo? {
+        val releaseApi = "https://api.github.com/repos/shaklow/syncclipboard-xposed/releases/latest"
+        return runCatching {
+            val conn = java.net.URL(releaseApi).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.setRequestProperty("Accept", "application/vnd.github+json")
+            try {
+                if (conn.responseCode != 200) return@runCatching null
+                val json = org.json.JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                // tag 格式 "v1.1.2"
+                val remoteName = json.optString("tag_name").removePrefix("v")
+                if (remoteName.isEmpty()) return@runCatching null
+                val localName = app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: return@runCatching null
+                if (compareVersionName(remoteName, localName) > 0) {
+                    UpdateInfo(0L, remoteName, json.optString("html_url"))
+                } else null
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
+    }
+
+    /** 语义化版本比较：返回正数表示 a 更新 */
+    private fun compareVersionName(a: String, b: String): Int {
+        val pa = a.split('.').map { it.toIntOrNull() ?: 0 }
+        val pb = b.split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val va = pa.getOrElse(i) { 0 }
+            val vb = pb.getOrElse(i) { 0 }
+            if (va != vb) return va.compareTo(vb)
+        }
+        return 0
     }
 
     fun refreshStatus() {

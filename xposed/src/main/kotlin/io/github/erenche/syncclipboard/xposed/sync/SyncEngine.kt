@@ -1498,6 +1498,18 @@ class SyncEngine private constructor() {
         }
     }
 
+    /** 清理引擎下载目录：仅保留当前文件，其余删除。
+     *  历史归档副本在 history_files/ 由 HistoryService 的磁盘 LRU 管理，下载目录只做"当前文件"暂存。 */
+    private fun trimDownloadsDir(context: Context, keepName: String) {
+        try {
+            val dir = java.io.File(context.filesDir, "downloads")
+            if (!dir.isDirectory) return
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name != keepName) f.delete()
+            }
+        } catch (_: Exception) {}
+    }
+
     /** 将 content:// URI 复制到临时文件，返回临时 File */
     private fun copyUriToTempFile(
         context: Context,
@@ -1551,6 +1563,8 @@ class SyncEngine private constructor() {
                 downloadedFileUri = android.net.Uri.fromFile(destFile)
                 downloadedFilePath = destPath
                 Logger.info(TAG, "File downloaded: $name -> $destPath (size=${destFile.length()})")
+                // downloads/ 仅保留"当前文件"：历史归档由 HistoryService 复制到 history_files/（受磁盘 LRU 管理）
+                trimDownloadsDir(context, name)
                 }
             } else {
                 Logger.debug(TAG, "downloadAndApplyContent: no file data, skipping download")
@@ -1914,6 +1928,8 @@ class SyncEngine private constructor() {
      *  获取 historySyncMutex 避免与 syncHistory 并发，复用 processPatchItem 逻辑。
      *  仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 PATCH，仅做本地变更。 */
     private suspend fun pushSingleHistoryUpdate(id: String) {
+        // 历史同步总开关关闭时：完全断开与服务器的历史交互（含星标/置顶等单条元数据推送）
+        if (!config.enableHistorySync) return
         val hs = getHistoryService() ?: return
         val client = apiClient ?: return
         val server = config.servers.getOrNull(config.activeServerIndex)

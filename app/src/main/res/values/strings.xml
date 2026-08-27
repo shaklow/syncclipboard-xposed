@@ -71,6 +71,8 @@
     <string name="server_delete">Delete Server</string>
     <string name="server_delete_confirm">Delete server \"%s\"?</string>
     <string name="server_test_success">Connection successful</string>
+    <string name="server_updated">Server updated</string>
+    <string name="server_added">Server added</string>
     <string name="server_test_fail">Connection failed</string>
     <string name="server_testing">Testing…</string>
     <string name="server_test_cancel">Cancel Test</string>
@@ -99,6 +101,17 @@
 
     <!-- Theme -->
     <string name="setting_theme_mode">Theme Mode</string>
+    <string name="setting_blur">Blur</string>
+    <string name="setting_blur_summary">Blur effect on the regular bottom bar</string>
+    <string name="setting_floating_bottom_bar">Floating Bottom Bar</string>
+    <string name="setting_floating_bottom_bar_summary">Floating capsule-style bottom navigation bar</string>
+    <string name="setting_bottom_bar_blur">Liquid Glass</string>
+    <string name="setting_bottom_bar_blur_summary">Liquid glass effect on the floating bottom bar</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_history">History</string>
+    <string name="nav_server">Server</string>
+    <string name="nav_settings">Settings</string>
+    <string name="update_available">New version v%1$s available, tap to view</string>
     <string name="setting_theme_color">Theme Color</string>
     <string name="setting_theme_color_summary">Choose accent color for the app</string>
     <string name="setting_theme_monet">Dynamic Color</string>

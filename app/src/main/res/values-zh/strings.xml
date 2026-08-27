@@ -71,6 +71,8 @@
     <string name="server_delete">删除服务器</string>
     <string name="server_delete_confirm">确定要删除服务器 \"%s\" 吗？</string>
     <string name="server_test_success">连接成功</string>
+    <string name="server_updated">服务器已更新</string>
+    <string name="server_added">服务器已添加</string>
     <string name="server_test_fail">连接失败</string>
     <string name="server_testing">测试中…</string>
     <string name="server_test_cancel">取消测试</string>
@@ -99,6 +101,17 @@
 
     <!-- Theme -->
     <string name="setting_theme_mode">主题模式</string>
+    <string name="setting_blur">模糊</string>
+    <string name="setting_blur_summary">常规底栏的模糊效果</string>
+    <string name="setting_floating_bottom_bar">悬浮底栏</string>
+    <string name="setting_floating_bottom_bar_summary">悬浮胶囊式底部导航栏</string>
+    <string name="setting_bottom_bar_blur">液态玻璃</string>
+    <string name="setting_bottom_bar_blur_summary">悬浮底栏的液态玻璃效果</string>
+    <string name="nav_home">主页</string>
+    <string name="nav_history">历史</string>
+    <string name="nav_server">服务器</string>
+    <string name="nav_settings">设置</string>
+    <string name="update_available">发现新版本 v%1$s，点击查看</string>
     <string name="setting_theme_color">主题颜色</string>
     <string name="setting_theme_color_summary">选择应用强调色</string>
     <string name="setting_theme_monet">动态取色</string>

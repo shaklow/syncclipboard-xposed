@@ -124,7 +124,10 @@ class HistoryService(context: Context) {
 
     /**
      * 从服务器下载时调用。
-     * syncStatus = Synced，使用已下载的文件路径（downloadPath）。
+     * syncStatus = Synced。
+     *
+     * downloadPath 存在时**归档到持久化历史目录**（与 LocalOnly 统一存储，受磁盘 LRU 管理）；
+     * 引擎 downloads/ 目录仅作为"当前文件"暂存（SyncEngine 下载新文件前清理旧文件）。
      */
     fun addRemoteContent(content: ClipboardContent, downloadPath: String? = null) {
         val hash = (content.profileHash ?: HashUtils.sha256(content.text)).lowercase()
@@ -132,13 +135,27 @@ class HistoryService(context: Context) {
         db.runInTransaction {
             val existing = dao.getByProfileHash(hash)?.toModel()
             if (existing != null && !existing.isDeleted) {
-                // 已存在，更新为 Synced（远程同步过来的）
-                dao.upsert(HistoryItemEntity.from(existing.copy(
-                    syncStatus = HistorySyncStatus.Synced,
-                    lastAccessed = System.currentTimeMillis(),
-                    fileUri = downloadPath ?: existing.fileUri
-                )))
+                // 已存在：已有本地归档副本则复用；否则用新下载的文件补一份归档
+                val now = System.currentTimeMillis()
+                if (existing.fileUri == null && downloadPath != null) {
+                    val archived = copyToHistoryDir(downloadPath, content.fileName, hash)
+                    dao.upsert(HistoryItemEntity.from(existing.copy(
+                        syncStatus = HistorySyncStatus.Synced,
+                        lastAccessed = now,
+                        fileUri = archived ?: downloadPath
+                    )))
+                } else {
+                    dao.upsert(HistoryItemEntity.from(existing.copy(
+                        syncStatus = HistorySyncStatus.Synced,
+                        lastAccessed = now
+                    )))
+                }
             } else {
+                // 数据文件统一归档到 history_files（downloads/ 仅暂存当前文件）
+                var fileUri: String? = downloadPath
+                if (content.hasData && downloadPath != null) {
+                    fileUri = copyToHistoryDir(downloadPath, content.fileName, hash) ?: downloadPath
+                }
                 dao.upsert(HistoryItemEntity.from(HistoryItem(
                     id = UUID.randomUUID().toString(),
                     type = content.type,
@@ -149,11 +166,11 @@ class HistoryService(context: Context) {
                     size = content.fileSize,
                     timestamp = content.timestamp,
                     syncStatus = HistorySyncStatus.Synced,
-                    fileUri = downloadPath
+                    fileUri = fileUri
                 )))
                 trimIfNeeded()
                 // 仅新增了文件才需要检查磁盘配额（文本不占历史目录）
-                if (downloadPath != null) enforceDiskLimit()
+                if (fileUri != null) enforceDiskLimit()
             }
         }
     }
@@ -614,9 +631,14 @@ class HistoryService(context: Context) {
     }
 
     /**
-     * 历史文件磁盘配额：总大小/数量超限时，按最后修改时间从旧到新删除文件，
-     * 并软删除对应历史记录（避免 UI 残留"有文件但文件丢失"的空壳）。
-     * 60s 节流：批量推送/同步时不会每条记录都全目录扫描。
+     * 历史文件磁盘配额：总大小/数量超限时，按**最近访问时间（lastAccessed）从旧到新**淘汰
+     * （严格 LRU；孤儿文件视为最旧，最先删）。60s 节流，避免高频写入时反复全目录扫描。
+     *
+     * 淘汰语义：
+     * - 已同步记录（Synced）：仅删除本地文件副本并清空 fileUri，**保留记录与服务器数据**，
+     *   需要时可重新下载；不标记 isDeleted，也不会把删除同步回服务器。
+     * - 本地独有记录（LocalOnly）：文件是唯一副本，放弃数据并软删除记录（服务器本就没有）。
+     * - 孤儿文件（DB 无对应记录）：直接删除。
      */
     fun enforceDiskLimit() {
         val now = System.currentTimeMillis()
@@ -628,31 +650,36 @@ class HistoryService(context: Context) {
         var total = files.sumOf { it.length() }
         var count = files.size
         if (total <= MAX_DISK_BYTES && count <= MAX_DISK_FILES) return
-        val sorted = files.sortedBy { it.lastModified() }
+
+        data class Entry(val file: File, val item: HistoryItem?, val len: Long)
+
+        // 严格 LRU：按 lastAccessed 升序（孤儿文件 = 最早，排最前），同访问时间按文件 mtime 兜底
+        val entries = files.map { f ->
+            val hash = f.name.substringBefore('_')
+            val item = runCatching { dao.getByProfileHash(hash)?.toModel() }.getOrNull()
+            Entry(f, item, f.length())
+        }.sortedWith(compareBy({ it.item?.lastAccessed ?: 0L }, { it.file.lastModified() }))
+
         var removed = 0
-        for (file in sorted) {
+        for (e in entries) {
             if (total <= MAX_DISK_BYTES && count <= MAX_DISK_FILES) break
-            val hash = file.name.substringBefore('_')
-            // 删除前记录大小：file.delete() 后 length() 返回 0，total 将无法递减
-            val fileLen = file.length()
-            try {
-                val item = dao.getByProfileHash(hash)?.toModel()
-                if (item != null && !item.isDeleted) {
-                    // 与 delete() 一致：已同步记录标记 NeedSync，下次同步推送删除
-                    val newStatus = if (item.syncStatus == HistorySyncStatus.Synced) {
-                        HistorySyncStatus.NeedSync
-                    } else item.syncStatus
-                    dao.upsert(HistoryItemEntity.from(item.copy(
-                        isDeleted = true,
-                        syncStatus = newStatus,
-                        lastModified = System.currentTimeMillis()
-                    )))
+            val item = e.item
+            if (item != null && !item.isDeleted) {
+                try {
+                    if (item.syncStatus == HistorySyncStatus.Synced) {
+                        // 保留服务器数据：仅清本地文件副本
+                        dao.upsert(HistoryItemEntity.from(item.copy(fileUri = null)))
+                    } else {
+                        // 本地独有：文件是唯一副本，连同记录一并放弃
+                        dao.softDeleteById(item.id)
+                    }
+                } catch (ex: Exception) {
+                    Logger.warn(TAG, "enforceDiskLimit: failed to update ${e.file.name}: ${ex.message}")
                 }
-            } catch (e: Exception) {
-                Logger.warn(TAG, "enforceDiskLimit: failed to mark ${file.name}: ${e.message}")
             }
-            if (file.delete()) {
-                total -= fileLen
+            // 删除前记录大小：file.delete() 后 length() 返回 0，total 将无法递减
+            if (e.file.delete()) {
+                total -= e.len
                 count -= 1
                 removed++
             }

@@ -38,6 +38,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
@@ -113,7 +114,10 @@ class HistoryActivity : BaseActivity() {
  */
 @OptIn(FlowPreview::class)
 @Composable
-fun HistoryScreen() {
+fun HistoryScreen(
+    bottomPadding: Dp = 0.dp,
+    embedded: Boolean = false,
+) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -360,10 +364,11 @@ fun HistoryScreen() {
             stringResource(R.string.history_selected_count, selectedIds.size)
         else
             stringResource(R.string.activity_history),
-        canBack = true,
-        onBack = { if (selectionMode) selectedIds = emptySet() else activity?.finish() },
+        canBack = !embedded,
+        onBack = { if (selectionMode) selectedIds = emptySet() else if (!embedded) activity?.finish() },
         isRefreshing = refreshing,
         onRefresh = { refreshFromServer() },
+        bottomPadding = bottomPadding,
         actions = {
             if (!loading && items.isNotEmpty()) {
                 if (selectionMode) {

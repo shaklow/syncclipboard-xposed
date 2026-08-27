@@ -48,10 +48,6 @@
             android:label="@string/activity_settings" />
 
         <activity
-            android:name=".activity.ServerConfigActivity"
-            android:label="@string/activity_server_config" />
-
-        <activity
             android:name=".activity.HistoryActivity"
             android:label="@string/activity_history" />
 
@@ -75,10 +71,6 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".activity.MoreActivity"
-            android:label="@string/item_more" />
 
         <activity
             android:name=".activity.LogActivity"

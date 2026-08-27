@@ -15,7 +15,7 @@ import kotlinx.serialization.encodeToString
 object Prefs {
 
     private const val PREFS_NAME = "syncclipboard_config"
-    private const val KEY_CONFIG = "app_config"
+    const val KEY_CONFIG = "app_config"
     private const val KEY_SERVERS = "servers"
     private const val KEY_ACTIVE_SERVER = "active_server_index"
     private const val KEY_HISTORY_LAST_SYNC_TIME = "history_last_sync_time"
@@ -49,6 +49,18 @@ object Prefs {
     fun saveConfig(context: Context, config: AppConfig) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_CONFIG, json.encodeToString(config)).apply()
+    }
+
+    /** 注册配置变更监听（KEY_CONFIG 变化时回调） */
+    fun registerConfigListener(context: Context, listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    /** 注销配置变更监听 */
+    fun unregisterConfigListener(context: Context, listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .unregisterOnSharedPreferenceChangeListener(listener)
     }
 
     /**
