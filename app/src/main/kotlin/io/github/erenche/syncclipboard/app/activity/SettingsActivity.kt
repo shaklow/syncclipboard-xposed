@@ -31,10 +31,6 @@ import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
 import io.github.erenche.syncclipboard.app.compose.preference.rememberBooleanPreference
 import io.github.erenche.syncclipboard.app.util.AppLangUtils
-import io.github.erenche.syncclipboard.app.util.AppThemeUtils
-import io.github.erenche.syncclipboard.app.util.ThemeColor
-import io.github.erenche.syncclipboard.app.util.ThemeState
-import io.github.erenche.syncclipboard.app.util.UiState
 import io.github.erenche.syncclipboard.app.util.resolveLanguageName
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
@@ -43,6 +39,7 @@ import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.extensions.defaultSharedPreferences
 import io.github.erenche.syncclipboard.common.model.AppConfig
 import io.github.erenche.syncclipboard.common.util.Logger
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -99,9 +96,21 @@ fun SettingsScreen(
         onBack = { activity?.finish() },
         bottomPadding = bottomPadding
     ) {
-        // 1. 主题与界面设置（含底栏样式）
+        // 1. 主题设置入口（模式 / Monet 配色 / 底栏样式均在主题页内）
         item("theme") {
-            ThemeSettingsCard(context, activity)
+            Card(
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = stringResource(R.string.setting_theme),
+                    summary = themeSummary(context),
+                    onClick = {
+                        context.startActivity(Intent(context, ThemeSettingsActivity::class.java))
+                    }
+                )
+            }
         }
 
         // 2. 语言切换
@@ -153,205 +162,7 @@ fun SettingsScreen(
     }
 }
 
-// ─── 主题设置 ─────────────────────────────────────────────────
-@Composable
-fun ThemeSettingsCard(context: android.content.Context, activity: Activity?) {
-    val themeModeOptions = listOf(
-        R.string.option_theme_system to AppThemeUtils.MODE_SYSTEM,
-        R.string.option_theme_light to AppThemeUtils.MODE_LIGHT,
-        R.string.option_theme_dark to AppThemeUtils.MODE_DARK
-    )
-    var showColorPicker by remember { mutableStateOf(false) }
-    val monetAvailable = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
-    // 直接读取可观察的 ThemeState，切换时实时触发 recomposition
-    val currentMode = ThemeState.mode
-    val monetEnabled = ThemeState.monetEnabled
-    val currentColorId = ThemeState.themeColorId
-    // Monet 开启时颜色选择不可用
-    val colorEnabled = !monetEnabled || !monetAvailable
-
-    Card(
-        modifier = Modifier
-            .padding(start = 16.dp, top = 16.dp, end = 16.dp)
-            .fillMaxWidth()
-    ) {
-        val selectedIndex = themeModeOptions.indexOfFirst { it.second == currentMode }
-            .coerceAtLeast(0)
-
-        OverlayDropdownPreference(
-            title = stringResource(R.string.setting_theme_mode),
-            items = themeModeOptions.map { stringResource(it.first) },
-            selectedIndex = selectedIndex,
-            onSelectedIndexChange = { index ->
-                val newMode = themeModeOptions[index].second
-                if (newMode != currentMode) {
-                    ThemeState.updateMode(context, newMode)
-                }
-            }
-        )
-
-        // ── 主题颜色选择行 ──
-        val currentThemeColor = ThemeColor.fromId(currentColorId)
-        val isDark = io.github.erenche.syncclipboard.app.compose.theme.CurrentThemeConfigs.isDark
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = colorEnabled) { showColorPicker = true }
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.setting_theme_color),
-                    fontSize = 16.sp,
-                    color = if (colorEnabled) MiuixTheme.colorScheme.onSurface
-                        else MiuixTheme.colorScheme.disabledOnSurface
-                )
-                Text(
-                    text = stringResource(R.string.setting_theme_color_summary),
-                    fontSize = 13.sp,
-                    color = if (colorEnabled) MiuixTheme.colorScheme.onSurfaceVariantSummary
-                        else MiuixTheme.colorScheme.disabledOnSurface
-                )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .background(
-                        color = if (colorEnabled)
-                            (if (isDark) currentThemeColor.darkPrimary else currentThemeColor.lightPrimary)
-                        else MiuixTheme.colorScheme.disabledOnSurface,
-                        shape = androidx.compose.foundation.shape.CircleShape
-                    )
-                    .border(
-                        width = 2.dp,
-                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                        shape = androidx.compose.foundation.shape.CircleShape
-                    )
-            )
-        }
-
-        if (monetAvailable) {
-            SwitchPreference(
-                title = stringResource(R.string.setting_theme_monet),
-                summary = stringResource(R.string.setting_theme_monet_summary),
-                checked = monetEnabled,
-                onCheckedChange = {
-                    ThemeState.updateMonet(context, it)
-                }
-            )
-        }
-
-        // ── 底栏样式 ──
-        SwitchPreference(
-            title = stringResource(R.string.setting_blur),
-            summary = stringResource(R.string.setting_blur_summary),
-            checked = UiState.blur,
-            onCheckedChange = { UiState.updateBlur(context, it) }
-        )
-        SwitchPreference(
-            title = stringResource(R.string.setting_floating_bottom_bar),
-            summary = stringResource(R.string.setting_floating_bottom_bar_summary),
-            checked = UiState.floatingBottomBar,
-            onCheckedChange = { UiState.updateFloatingBottomBar(context, it) }
-        )
-        // 液态玻璃仅在悬浮底栏开启时可用
-        AnimatedVisibility(
-            visible = UiState.floatingBottomBar,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
-        ) {
-            SwitchPreference(
-                title = stringResource(R.string.setting_bottom_bar_blur),
-                summary = stringResource(R.string.setting_bottom_bar_blur_summary),
-                checked = UiState.bottomBarBlur,
-                onCheckedChange = { UiState.updateBottomBarBlur(context, it) }
-            )
-        }
-    }
-
-    // ── 颜色选择对话框（常驻组合以保留关闭动画）──
-    ThemeColorPickerDialog(
-        show = showColorPicker,
-        currentColorId = currentColorId,
-        onColorSelected = { themeColor ->
-            ThemeState.updateThemeColor(context, themeColor.id)
-        },
-        onDismiss = { showColorPicker = false }
-    )
-}
-
-/**
- * 主题颜色选择对话框 — 以网格形式展示预设颜色。
- */
-@Composable
-private fun ThemeColorPickerDialog(
-    show: Boolean,
-    currentColorId: String,
-    onColorSelected: (ThemeColor) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val isDark = io.github.erenche.syncclipboard.app.compose.theme.CurrentThemeConfigs.isDark
-    OverlayDialog(
-        show = show,
-        title = stringResource(R.string.setting_theme_color),
-        onDismissRequest = onDismiss
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // 4 列网格
-            val rows = ThemeColor.entries.chunked(4)
-            rows.forEach { rowColors ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    rowColors.forEach { themeColor ->
-                        val isSelected = themeColor.id == currentColorId
-                        val color = if (isDark) themeColor.darkPrimary else themeColor.lightPrimary
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable {
-                                onColorSelected(themeColor)
-                                onDismiss()
-                            }
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(color = color, shape = androidx.compose.foundation.shape.CircleShape)
-                                    .border(
-                                        width = if (isSelected) 3.dp else 0.dp,
-                                        color = if (isSelected) MiuixTheme.colorScheme.onSurface
-                                            else Color.Transparent,
-                                        shape = androidx.compose.foundation.shape.CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Ok,
-                                        contentDescription = null,
-                                        tint = if (color.luminance() > 0.5f) Color.Black else Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = themeColor.name.lowercase(),
-                                fontSize = 11.sp,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// ─── 主题设置（已迁移至 ThemeSettingsActivity）──────────────────
 
 // ─── 语言切换 ─────────────────────────────────────────────────
 @Composable
@@ -878,6 +689,21 @@ fun AutoSaveSettingsCard(context: android.content.Context) {
 fun StorageSettingsCard(context: android.content.Context) {
     var cacheSize by remember { mutableStateOf(getCacheSize(context)) }
     var showCleanupDialog by remember { mutableStateOf(false) }
+    // 引擎侧数据大小（SystemUI 私有目录，需 IPC 查询；null = 查询中/不可用）
+    var engineSize by remember { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun queryEngineSize(): Long? = try {
+        val result = SyncClipboardBridge.with(context)
+            .to(PackageNames.SYSTEM_UI)
+            .key(BridgeKeys.GET_ENGINE_STORAGE_SIZE)
+            .await()
+        result.getLong("bytes", 0L)
+    } catch (_: Exception) {
+        null
+    }
+
+    LaunchedEffect(Unit) { engineSize = queryEngineSize() }
 
     Card(
         modifier = Modifier
@@ -918,7 +744,9 @@ fun StorageSettingsCard(context: android.content.Context) {
         // 清理引擎数据（引擎侧历史/下载/临时文件，破坏性操作需确认）
         ArrowPreference(
             title = stringResource(R.string.item_clean_engine_data),
-            summary = stringResource(R.string.item_clean_engine_data_summary),
+            summary = engineSize?.let {
+                stringResource(R.string.item_clean_engine_data_summary_size, formatFileSize(it))
+            } ?: stringResource(R.string.item_clean_engine_data_summary),
             onClick = { showCleanupDialog = true }
         )
     }
@@ -946,6 +774,11 @@ fun StorageSettingsCard(context: android.content.Context) {
                         .to(PackageNames.SYSTEM_UI)
                         .key(BridgeKeys.CLEAR_ENGINE_DATA)
                         .send()
+                    // 引擎异步清理，稍后重查大小
+                    scope.launch {
+                        kotlinx.coroutines.delay(1500)
+                        engineSize = queryEngineSize()
+                    }
                     android.widget.Toast.makeText(
                         context,
                         R.string.clean_engine_data_done,

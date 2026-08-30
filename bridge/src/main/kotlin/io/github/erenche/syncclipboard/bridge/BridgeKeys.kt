@@ -116,6 +116,9 @@ object BridgeKeys {
     /** 清理引擎本地数据（历史库/历史文件/下载目录/上传临时文件） */
     const val CLEAR_ENGINE_DATA = "clear_engine_data"
 
+    /** 查询引擎本地数据占用大小。返回 bytes（历史库+历史文件+下载目录+上传临时文件） */
+    const val GET_ENGINE_STORAGE_SIZE = "get_engine_storage_size"
+
     /** 查询引擎已下载的文件（避免 app 重复走网络下载）。
      *  payload: fileName；返回 bytes（byte[]，≤2MB）+ size，无则空 Bundle */
     const val GET_DOWNLOADED_FILE = "get_downloaded_file"

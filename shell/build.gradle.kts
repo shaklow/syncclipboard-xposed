@@ -2,6 +2,8 @@ import com.android.build.api.dsl.ApplicationExtension
 
 plugins {
     alias(libs.plugins.android.application)
+    // 开源许可列表：构建时自动生成 raw/aboutlibraries.json（收集全部依赖）
+    alias(libs.plugins.aboutlibraries)
 }
 
 // 构建前自动生成 debug keystore（keytool 由 JDK 提供，Linux/Windows 通用）

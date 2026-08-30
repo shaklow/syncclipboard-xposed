@@ -90,6 +90,9 @@ miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur-android", version.ref 
 # ===== Material Icons =====
 material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
 
+# ===== AboutLibraries（开源许可列表，参考 ReSukiSU / lyricon）=====
+aboutlibraries-core = { module = "com.mikepenz:aboutlibraries-core", version = "14.2.1" }
+
 # ===== Testing =====
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
@@ -106,3 +109,6 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 
 # ===== KSP =====
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+
+# ===== AboutLibraries =====
+aboutlibraries = { id = "com.mikepenz.aboutlibraries.plugin", version = "14.2.1" }

@@ -57,6 +57,7 @@ import io.github.erenche.syncclipboard.app.component.FloatingBottomBar
 import io.github.erenche.syncclipboard.app.component.FloatingBottomBarItem
 import io.github.erenche.syncclipboard.app.component.rememberBlurBackdrop
 import io.github.erenche.syncclipboard.app.component.rememberMainPagerState
+import io.github.erenche.syncclipboard.app.util.ThemeState
 import io.github.erenche.syncclipboard.app.util.UiState
 import io.github.erenche.syncclipboard.app.viewmodel.MainViewModel
 import io.github.erenche.syncclipboard.app.viewmodel.UpdateInfo
@@ -453,12 +454,25 @@ private fun UpdateCard(updateInfo: UpdateInfo?, onClick: () -> Unit) {
 fun StatusCard(viewModel: MainViewModel) {
     val isActive by viewModel.isModuleActive
     val syncStatus by viewModel.syncStatus
-    val bgColor = if (isActive) Color(0xFF4CAF50) else Color(0xFFF44336)
+    // 状态色：Monet 开启时适配主题（激活=主题强调色，未激活=主题错误色）；
+    // 关闭 Monet 时保持原来的绿色/红色
+    val monet = ThemeState.monetEnabled
+    val bgColor: Color = when {
+        monet && isActive -> MiuixTheme.colorScheme.primary
+        monet -> MiuixTheme.colorScheme.error
+        isActive -> Color(0xFF4CAF50)
+        else -> Color(0xFFF44336)
+    }
+    val contentColor: Color = when {
+        monet -> if (isActive) MiuixTheme.colorScheme.onPrimary
+        else MiuixTheme.colorScheme.onError
+        else -> Color.White
+    }
     val statusIcon = if (isActive) MiuixIcons.Ok else MiuixIcons.Info
 
     Card(
         modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
-        colors = CardColors(bgColor, Color.White)
+        colors = CardColors(bgColor, contentColor)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -467,7 +481,7 @@ fun StatusCard(viewModel: MainViewModel) {
             Icon(
                 imageVector = statusIcon,
                 contentDescription = null,
-                tint = Color.White,
+                tint = contentColor,
                 modifier = Modifier.size(28.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -477,14 +491,14 @@ fun StatusCard(viewModel: MainViewModel) {
                         if (isActive) R.string.module_status_activated
                         else R.string.module_status_not_activated
                     ),
-                    color = Color.White,
+                    color = contentColor,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.main_sync_status, stringResource(syncStatus)),
-                    color = Color.White.copy(alpha = 0.8f),
+                    color = contentColor.copy(alpha = 0.8f),
                     fontSize = 14.sp
                 )
             }

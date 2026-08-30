@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
 @Composable
 fun NavigationBackIcon(onBack: () -> Unit) {
@@ -60,12 +63,15 @@ fun AppToolBarListContainer(
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
     bottomPadding: Dp = 0.dp,
+    listState: LazyListState? = null,
     content: LazyListScope.() -> Unit
 ) {
     AppTheme {
         // 顶栏毛玻璃背景（设置中"模糊"开关控制，设备不支持时自动降级为纯色）
         val backdrop = rememberBlurBackdrop(UiState.blur)
         val blurActive = backdrop != null
+        val defaultListState = rememberLazyListState()
+        val state = listState ?: defaultListState
         Scaffold(
             topBar = {
                 BlurredBar(backdrop) {
@@ -91,8 +97,10 @@ fun AppToolBarListContainer(
                         contentPadding = PaddingValues(top = topPadding),
                     ) {
                         LazyColumn(
+                            state = state,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .scrollEndHaptic()
                                 .overScrollVertical(),
                             contentPadding = PaddingValues(top = topPadding, bottom = bottomPadding),
                             overscrollEffect = null,
@@ -101,8 +109,10 @@ fun AppToolBarListContainer(
                     }
                 } else {
                     LazyColumn(
+                        state = state,
                         modifier = Modifier
                             .fillMaxSize()
+                            .scrollEndHaptic()
                             .overScrollVertical(),
                         contentPadding = PaddingValues(top = topPadding, bottom = bottomPadding),
                         overscrollEffect = null,

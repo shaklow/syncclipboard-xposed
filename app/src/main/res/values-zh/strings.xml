@@ -100,6 +100,7 @@
     <string name="server_prefix_hint">syncclipboard/</string>
 
     <!-- Theme -->
+    <string name="setting_theme">主题</string>
     <string name="setting_theme_mode">主题模式</string>
     <string name="setting_blur">模糊</string>
     <string name="setting_blur_summary">常规底栏的模糊效果</string>
@@ -116,6 +117,28 @@
     <string name="setting_theme_color_summary">选择应用强调色</string>
     <string name="setting_theme_monet">动态取色</string>
     <string name="setting_theme_monet_summary">使用系统壁纸颜色（Android 12+）</string>
+    <string name="settings_monet">启用 Monet</string>
+    <string name="settings_monet_summary">由种子颜色生成全套配色（壁纸或自定义）</string>
+    <string name="settings_monet_hint">Monet 使用 Material Color Utilities 从种子颜色生成完整配色方案。“默认”跟随系统壁纸颜色，也可在下方选择颜色覆盖。</string>
+    <string name="settings_key_color">种子颜色</string>
+    <string name="settings_color_style">配色风格</string>
+    <string name="settings_color_spec">颜色规格</string>
+    <string name="color_default">默认</string>
+    <string name="color_red">红色</string>
+    <string name="color_pink">粉色</string>
+    <string name="color_purple">紫色</string>
+    <string name="color_deep_purple">深紫</string>
+    <string name="color_indigo">靛蓝</string>
+    <string name="color_blue">蓝色</string>
+    <string name="color_cyan">青色</string>
+    <string name="color_teal">蓝绿</string>
+    <string name="color_green">绿色</string>
+    <string name="color_yellow">黄色</string>
+    <string name="color_amber">琥珀</string>
+    <string name="color_orange">橙色</string>
+    <string name="color_brown">棕色</string>
+    <string name="color_blue_grey">蓝灰</string>
+    <string name="color_sakura">樱花</string>
     <string name="option_theme_system">跟随系统</string>
     <string name="option_theme_light">浅色</string>
     <string name="option_theme_dark">深色</string>
@@ -183,6 +206,7 @@
     <string name="item_log_summary">查看同步引擎运行日志</string>
     <string name="item_clean_engine_data">清理引擎数据</string>
     <string name="item_clean_engine_data_summary">删除引擎侧历史、下载文件与临时文件</string>
+    <string name="item_clean_engine_data_summary_size">删除引擎侧历史、下载文件与临时文件 · 已占用 %1$s</string>
     <string name="clean_engine_data_confirm">将删除引擎侧所有数据（历史记录、下载文件、临时文件），不影响服务器上的数据。确定继续吗？</string>
     <string name="clean_engine_data_done">引擎数据已清理</string>
     <string name="log_level_debug">调试</string>
@@ -275,11 +299,35 @@
     <string name="about_version">版本 %s</string>
     <string name="about_description">用于设备间静默剪贴板同步的 LSPosed 模块。</string>
     <string name="about_supported_backends">支持 SyncClipboard Server、WebDAV 和 S3 兼容存储后端。</string>
-    <string name="about_how_it_works_title">工作原理</string>
-    <string name="about_how_it_works_text">此模块在系统层面钩入 Android 的 ClipboardService，无需轮询即可实时检测剪贴板变更。变更会自动同步到您配置的服务器。</string>
     <string name="about_license_title">许可协议</string>
     <string name="about_license_text">Apache License 2.0</string>
     <string name="about_source_code">源代码</string>
+    <string name="about_open_source_licenses">开放源代码许可</string>
+    <string name="about_open_source_licenses_summary">查看本项目使用的开源组件</string>
+    <string name="oss_syncclipboard">SyncClipboard</string>
+    <string name="oss_syncclipboard_license">MIT</string>
+    <string name="oss_lyricon">lyricon</string>
+    <string name="oss_lyricon_license">Apache 2.0</string>
+    <string name="oss_installer">InstallerX-Revived</string>
+    <string name="oss_installer_license">GPL v3</string>
+    <string name="oss_miuix">MIUIX</string>
+    <string name="oss_miuix_license">Apache 2.0</string>
+    <string name="oss_materialkolor">materialKolor</string>
+    <string name="oss_materialkolor_license">Apache 2.0</string>
+    <string name="oss_sukisu">SukiSU-Ultra</string>
+    <string name="oss_sukisu_license">GPL v3</string>
+    <string name="oss_lsposed">LSPosed</string>
+    <string name="oss_lsposed_license">GPL v3</string>
+    <string name="oss_ktor">Ktor</string>
+    <string name="oss_ktor_license">Apache 2.0</string>
+    <string name="oss_room">Room</string>
+    <string name="oss_room_license">Apache 2.0</string>
+    <string name="oss_kotlinx_serialization">kotlinx.serialization</string>
+    <string name="oss_kotlinx_serialization_license">Apache 2.0</string>
+    <string name="oss_kotlinx_coroutines">kotlinx.coroutines</string>
+    <string name="oss_kotlinx_coroutines_license">Apache 2.0</string>
+    <string name="oss_androidx">AndroidX / Jetpack Compose</string>
+    <string name="oss_androidx_license">Apache 2.0</string>
 
     <!-- Main Screen -->
     <string name="main_sync_status">同步状态: %s</string>

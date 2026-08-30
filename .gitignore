@@ -1,6 +1,7 @@
 # Gradle
 .gradle/
 build/
+dist/
 **/build/
 
 # Android
@@ -19,7 +20,7 @@ local.properties
 .DS_Store
 Thumbs.db
 
-# Keystore（如果你之后添加正式签名配置请确保不提交）
+# Keystore
 *.keystore
 *.jks
 

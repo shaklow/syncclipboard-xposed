@@ -80,6 +80,14 @@
             android:name=".activity.AboutActivity"
             android:label="@string/activity_about" />
 
+        <activity
+            android:name=".activity.ThemeSettingsActivity"
+            android:label="@string/setting_theme" />
+
+        <activity
+            android:name=".activity.OpenSourceLicensesActivity"
+            android:label="@string/about_open_source_licenses" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
