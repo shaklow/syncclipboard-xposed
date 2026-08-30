@@ -36,8 +36,8 @@ miuixBlur = "0.9.3"
 materialIconsExtended = "1.7.8"
 
 # LSPosed
-xposed-api = "101.0.1"
-xposed-service = "101.0.0"
+xposed-api = "102.0.0"
+xposed-service = "102.0.0"
 
 # Testing
 androidxJunit = "1.3.0"

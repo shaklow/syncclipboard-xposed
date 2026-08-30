@@ -26,12 +26,14 @@ import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
+import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
@@ -67,6 +69,9 @@ class SyncEngine private constructor() {
         fun getInstance(): SyncEngine = instance ?: synchronized(this) {
             instance ?: SyncEngine().also { instance = it }
         }
+
+        /** 引擎是否已初始化（仅 SystemUI 进程为 true） */
+        fun isInitialized(): Boolean = instance?.appContext != null
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -624,6 +629,34 @@ class SyncEngine private constructor() {
             cm?.removePrimaryClipChangedListener(clipChangedListener)
         } catch (_: Exception) {}
         Logger.info(TAG, "SyncEngine stopped")
+    }
+
+    /**
+     * 完整拆除引擎（模块热重载前调用）。
+     *
+     * 与 [stop] 的区别：stop 仅停止监听与轮询标志，协程与资源仍存活；
+     * shutdown 额外取消全部协程、释放 SignalR/数据库连接、拆除 IPC 路由并复位单例，
+     * 确保旧代模块代码不再持有任何系统引用（ClipboardManager/广播/网络回调），
+     * 新代模块可通过 [initialize] 干净重建。
+     */
+    fun shutdown() {
+        if (appContext == null) return
+        stop()
+        signalRClient?.dispose()
+        signalRClient = null
+        isSignalRConnected = false
+        historyPushConsumer?.cancel()
+        historyPushConsumer = null
+        // 取消轮询循环与所有后台协程（含 delay 中的等待）
+        scope.coroutineContext[Job]?.cancelChildren()
+        // 拆除 IPC 路由：反注册 receiver，防止新旧两代并存双重处理
+        SyncClipboardBridge.teardown()
+        // 关闭历史数据库连接（旧代 Room 实例随类加载器一起废弃）
+        historyService?.let { _ -> AppDatabase.closeInstance() }
+        historyService = null
+        appContext = null
+        synchronized(Companion) { instance = null }
+        Logger.info(TAG, "SyncEngine shutdown (hot reload)")
     }
 
     /**

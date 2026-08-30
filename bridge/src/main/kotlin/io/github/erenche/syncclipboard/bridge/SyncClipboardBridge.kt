@@ -10,7 +10,9 @@ import io.github.erenche.syncclipboard.common.util.Logger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
@@ -51,8 +53,13 @@ object SyncClipboardBridge {
     /** 处理器存储：支持挂起函数的 Lambda 容器 */
     private val handlers = ConcurrentHashMap<String, suspend (Bundle) -> Bundle?>()
 
-    /** 桥接器全局协程作用域 */
-    private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** 桥接器协程作用域（teardown 后重建以支持同代复用） */
+    @Volatile
+    private var bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** receiver 注册时使用的上下文（teardown 反注册用） */
+    @Volatile
+    private var registeredContext: Context? = null
 
     /** 广播接收器：处理来自其他进程的请求 */
     private val receiver = object : BroadcastReceiver() {
@@ -110,10 +117,29 @@ object SyncClipboardBridge {
                     null,
                     ContextCompat.RECEIVER_EXPORTED
                 )
+                registeredContext = context.applicationContext
                 isInitialized = true
             }
         }
         BridgeRoutingScope().apply(block)
+    }
+
+    /**
+     * 拆除 IPC 路由：反注册 receiver、取消协程、清空处理器。
+     * 模块热重载前由服务端进程调用，防止新旧两代 receiver 并存导致 IPC 双重处理。
+     */
+    fun teardown() {
+        synchronized(this) {
+            registeredContext?.let { ctx ->
+                runCatching { ctx.unregisterReceiver(receiver) }
+            }
+            registeredContext = null
+            isInitialized = false
+        }
+        bridgeScope.coroutineContext[Job]?.cancelChildren()
+        bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        handlers.clear()
+        Logger.info(TAG, "Bridge torn down")
     }
 
     /**

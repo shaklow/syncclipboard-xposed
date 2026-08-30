@@ -4,6 +4,7 @@ import androidx.annotation.Keep
 import io.github.erenche.syncclipboard.common.PackageNames
 import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.hook.GeneralHooker
+import io.github.erenche.syncclipboard.xposed.sync.SyncEngine
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 
@@ -16,6 +17,10 @@ import io.github.libxposed.api.XposedModuleInterface
  *
  * 剪贴板变化仅通过 OnPrimaryClipChangedListener 监听（系统级，单一路径），
  * 避免 ClipboardHooker / 轮询多路径竞态导致重复上传。
+ *
+ * 热重载（API 102）：更新模块无需重启 SystemUI。
+ * - onHotReloading（旧代码）：拆除引擎（协程/监听器/SignalR/IPC 路由/数据库）
+ * - onHotReloaded（新代码）：重装 hook 并重建引擎（生命周期回调不自动重放）
  */
 @Keep
 class ModuleEntry : XposedModule() {
@@ -40,5 +45,28 @@ class ModuleEntry : XposedModule() {
         Logger.info(TAG, "onPackageLoaded: $pkg")
 
         GeneralHooker.hook(this, param)
+    }
+
+    override fun onHotReloading(param: XposedModuleInterface.HotReloadingParam): Boolean {
+        Logger.info(TAG, "onHotReloading: tearing down old generation")
+        return try {
+            // SystemUI 进程：完整拆除引擎，清除模块对系统对象的所有引用
+            if (SyncEngine.isInitialized()) {
+                SyncEngine.getInstance().shutdown()
+            }
+            true
+        } catch (e: Throwable) {
+            // 拆除失败时拒绝热重载，避免新旧两代并存（回退为需重启 SystemUI）
+            Logger.error(TAG, "Hot reload teardown failed, rejecting hot reload", e)
+            false
+        }
+    }
+
+    override fun onHotReloaded(param: XposedModuleInterface.HotReloadedParam) {
+        // 默认实现卸载全部旧 hook
+        super.onHotReloaded(param)
+        Logger.info(TAG, "onHotReloaded: new generation active")
+        // 生命周期回调不重放，手动重装 hook 与引擎
+        GeneralHooker.onHotReloaded(this)
     }
 }
