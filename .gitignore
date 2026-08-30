@@ -2,6 +2,7 @@
 .gradle/
 build/
 dist/
+syncclipboard-zygisk/
 **/build/
 
 # Android
