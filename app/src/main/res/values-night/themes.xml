@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    深色模式主题覆盖：
+    与 values/themes.xml 同名样式，夜间模式下自动生效。
+    parent 使用 android:Theme.Material.NoActionBar（深色），
+    使启动闪屏 / 窗口背景 / 系统栏在深色模式下保持深色，避免启动瞬间白底闪烁。
+-->
+<resources>
+    <style name="Theme.DayNight" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.SplashScreen" parent="android:Theme.Material.NoActionBar" />
+</resources>

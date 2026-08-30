@@ -10,8 +10,8 @@ plugins {
 }
 
 extra["appPackageName"] = "io.github.erenche.syncclipboard"
-extra["appVersionCode"] = 54
-extra["appVersionName"] = "1.1.2"
+extra["appVersionCode"] = 55
+extra["appVersionName"] = "1.2.0"
 extra["compileSdkVersion"] = 37
 extra["targetSdkVersion"] = 37
 extra["minSdkVersion"] = 29

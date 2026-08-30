@@ -60,6 +60,12 @@ dependencies {
     implementation(libs.miuix.icons)
     implementation(libs.miuix.preference)
 
+    // Material Icons（底栏图标）
+    implementation(libs.material.icons.extended)
+
+    // 开源许可列表（数据解析；json 由 :shell 的 AboutLibraries 插件生成）
+    implementation(libs.aboutlibraries.core)
+
     // Core Logic & AndroidX
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

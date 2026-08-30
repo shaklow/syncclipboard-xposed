@@ -5,7 +5,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import io.github.erenche.syncclipboard.app.util.AppLangUtils
+import io.github.erenche.syncclipboard.app.util.AppThemeUtils
 import io.github.erenche.syncclipboard.app.util.ThemeState
+import io.github.erenche.syncclipboard.app.util.UiState
 
 /**
  * BaseActivity — 所有 Activity 的基类。
@@ -19,9 +21,21 @@ open class BaseActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 手动强制深色主题时，若系统仍为浅色模式，窗口默认背景是浅色，
+        // 启动闪屏到 Compose 首帧之间会出现白底闪烁。这里把窗口背景同步为深色。
+        // （跟随系统模式由 values-night/themes.xml 自动适配，无需运行时处理）
+        if (ThemeState.mode == AppThemeUtils.MODE_DARK) {
+            window.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(
+                    android.graphics.Color.rgb(16, 16, 18)
+                )
+            )
+        }
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // 同步主题状态，确保 Activity 重建后读取最新设置
         ThemeState.sync(this)
+        // 同步界面状态（悬浮底栏/液态玻璃）
+        UiState.sync(this)
     }
 }

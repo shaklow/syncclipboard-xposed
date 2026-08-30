@@ -1,6 +1,7 @@
 package io.github.erenche.syncclipboard.app.activity
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -29,26 +31,27 @@ import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
 import io.github.erenche.syncclipboard.app.compose.preference.rememberBooleanPreference
 import io.github.erenche.syncclipboard.app.util.AppLangUtils
-import io.github.erenche.syncclipboard.app.util.AppThemeUtils
-import io.github.erenche.syncclipboard.app.util.ThemeColor
-import io.github.erenche.syncclipboard.app.util.ThemeState
 import io.github.erenche.syncclipboard.app.util.resolveLanguageName
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
+import io.github.erenche.syncclipboard.common.PackageNames
 import io.github.erenche.syncclipboard.common.Prefs
 import io.github.erenche.syncclipboard.common.extensions.defaultSharedPreferences
 import io.github.erenche.syncclipboard.common.model.AppConfig
 import io.github.erenche.syncclipboard.common.util.Logger
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SpinnerEntry
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.icon.extended.Translate
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.OverlaySpinnerPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
@@ -80,18 +83,34 @@ private fun restartApp(activity: Activity?) {
 }
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    bottomPadding: Dp = 0.dp,
+    canBack: Boolean = true,
+) {
     val context = LocalContext.current
     val activity = context as? Activity
 
     AppToolBarListContainer(
         title = stringResource(R.string.activity_settings),
-        canBack = true,
-        onBack = { activity?.finish() }
+        canBack = canBack,
+        onBack = { activity?.finish() },
+        bottomPadding = bottomPadding
     ) {
-        // 1. 主题设置
+        // 1. 主题设置入口（模式 / Monet 配色 / 底栏样式均在主题页内）
         item("theme") {
-            ThemeSettingsCard(context, activity)
+            Card(
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = stringResource(R.string.setting_theme),
+                    summary = themeSummary(context),
+                    onClick = {
+                        context.startActivity(Intent(context, ThemeSettingsActivity::class.java))
+                    }
+                )
+            }
         }
 
         // 2. 语言切换
@@ -109,195 +128,41 @@ fun SettingsScreen() {
             HistorySettingsCard()
         }
 
-        // 6. 日志设置
+        // 5. 日志设置
         item("logging") {
             LoggingSettingsCard(context)
         }
 
-        // 7. 自动保存设置
+        // 6. 自动保存设置
         item("auto_save") {
             AutoSaveSettingsCard(context)
         }
 
-        // 8. 缓存管理
+        // 7. 存储清理（缓存 + 引擎数据）
         item("cache") {
-            CacheSettingsCard(context)
+            StorageSettingsCard(context)
         }
-    }
-}
 
-// ─── 主题设置 ─────────────────────────────────────────────────
-@Composable
-fun ThemeSettingsCard(context: android.content.Context, activity: Activity?) {
-    val themeModeOptions = listOf(
-        R.string.option_theme_system to AppThemeUtils.MODE_SYSTEM,
-        R.string.option_theme_light to AppThemeUtils.MODE_LIGHT,
-        R.string.option_theme_dark to AppThemeUtils.MODE_DARK
-    )
-    var showColorPicker by remember { mutableStateOf(false) }
-    val monetAvailable = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
-    // 直接读取可观察的 ThemeState，切换时实时触发 recomposition
-    val currentMode = ThemeState.mode
-    val monetEnabled = ThemeState.monetEnabled
-    val currentColorId = ThemeState.themeColorId
-    // Monet 开启时颜色选择不可用
-    val colorEnabled = !monetEnabled || !monetAvailable
-
-    Card(
-        modifier = Modifier
-            .padding(start = 16.dp, top = 16.dp, end = 16.dp)
-            .fillMaxWidth()
-    ) {
-        val selectedIndex = themeModeOptions.indexOfFirst { it.second == currentMode }
-            .coerceAtLeast(0)
-
-        OverlayDropdownPreference(
-            title = stringResource(R.string.setting_theme_mode),
-            items = themeModeOptions.map { stringResource(it.first) },
-            selectedIndex = selectedIndex,
-            onSelectedIndexChange = { index ->
-                val newMode = themeModeOptions[index].second
-                if (newMode != currentMode) {
-                    ThemeState.updateMode(context, newMode)
-                }
-            }
-        )
-
-        // ── 主题颜色选择行 ──
-        val currentThemeColor = ThemeColor.fromId(currentColorId)
-        val isDark = io.github.erenche.syncclipboard.app.compose.theme.CurrentThemeConfigs.isDark
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = colorEnabled) { showColorPicker = true }
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.setting_theme_color),
-                    fontSize = 16.sp,
-                    color = if (colorEnabled) MiuixTheme.colorScheme.onSurface
-                        else MiuixTheme.colorScheme.disabledOnSurface
-                )
-                Text(
-                    text = stringResource(R.string.setting_theme_color_summary),
-                    fontSize = 13.sp,
-                    color = if (colorEnabled) MiuixTheme.colorScheme.onSurfaceVariantSummary
-                        else MiuixTheme.colorScheme.disabledOnSurface
-                )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Box(
+        // 8. 关于
+        item("about") {
+            Card(
                 modifier = Modifier
-                    .size(28.dp)
-                    .background(
-                        color = if (colorEnabled)
-                            (if (isDark) currentThemeColor.darkPrimary else currentThemeColor.lightPrimary)
-                        else MiuixTheme.colorScheme.disabledOnSurface,
-                        shape = androidx.compose.foundation.shape.CircleShape
-                    )
-                    .border(
-                        width = 2.dp,
-                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                        shape = androidx.compose.foundation.shape.CircleShape
-                    )
-            )
-        }
-
-        if (monetAvailable) {
-            SwitchPreference(
-                title = stringResource(R.string.setting_theme_monet),
-                summary = stringResource(R.string.setting_theme_monet_summary),
-                checked = monetEnabled,
-                onCheckedChange = {
-                    ThemeState.updateMonet(context, it)
-                }
-            )
-        }
-    }
-
-    // ── 颜色选择对话框 ──
-    if (showColorPicker) {
-        ThemeColorPickerDialog(
-            currentColorId = currentColorId,
-            onColorSelected = { themeColor ->
-                ThemeState.updateThemeColor(context, themeColor.id)
-            },
-            onDismiss = { showColorPicker = false }
-        )
-    }
-}
-
-/**
- * 主题颜色选择对话框 — 以网格形式展示预设颜色。
- */
-@Composable
-private fun ThemeColorPickerDialog(
-    currentColorId: String,
-    onColorSelected: (ThemeColor) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val isDark = io.github.erenche.syncclipboard.app.compose.theme.CurrentThemeConfigs.isDark
-    OverlayDialog(
-        show = true,
-        title = stringResource(R.string.setting_theme_color),
-        onDismissRequest = onDismiss
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // 4 列网格
-            val rows = ThemeColor.entries.chunked(4)
-            rows.forEach { rowColors ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    rowColors.forEach { themeColor ->
-                        val isSelected = themeColor.id == currentColorId
-                        val color = if (isDark) themeColor.darkPrimary else themeColor.lightPrimary
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable {
-                                onColorSelected(themeColor)
-                                onDismiss()
-                            }
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(color = color, shape = androidx.compose.foundation.shape.CircleShape)
-                                    .border(
-                                        width = if (isSelected) 3.dp else 0.dp,
-                                        color = if (isSelected) MiuixTheme.colorScheme.onSurface
-                                            else Color.Transparent,
-                                        shape = androidx.compose.foundation.shape.CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Ok,
-                                        contentDescription = null,
-                                        tint = if (color.luminance() > 0.5f) Color.Black else Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = themeColor.name.lowercase(),
-                                fontSize = 11.sp,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            )
-                        }
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = stringResource(R.string.item_about_app),
+                    summary = stringResource(R.string.item_about_app_summary),
+                    onClick = {
+                        context.startActivity(Intent(context, AboutActivity::class.java))
                     }
-                }
+                )
             }
         }
     }
 }
+
+// ─── 主题设置（已迁移至 ThemeSettingsActivity）──────────────────
 
 // ─── 语言切换 ─────────────────────────────────────────────────
 @Composable
@@ -366,23 +231,31 @@ fun LanguageCard(context: android.content.Context, activity: Activity?) {
 // ─── 同步设置（含后台子开关与轮询设置）─────────────────────────────
 @Composable
 fun SyncSettingsCard(context: android.content.Context) {
-    var autoSync by remember { mutableStateOf(Prefs.loadConfig(context).enableAutoSync) }
-    var bgUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableBackgroundUpload) }
-    var bgDownload by remember { mutableStateOf(Prefs.loadConfig(context).enableBackgroundDownload) }
-    var stopOnBattery by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnBatterySaver) }
-    var stopOnScreenOff by remember { mutableStateOf(Prefs.loadConfig(context).stopPollingOnScreenOff) }
-    var stopOnMobileData by remember { mutableStateOf(Prefs.loadConfig(context).disconnectOnMobileData) }
-    var pollingIntervalSec by remember { mutableStateOf(Prefs.loadConfig(context).pollingIntervalSec.coerceAtLeast(1)) }
-    var screenOffDelaySec by remember { mutableStateOf(Prefs.loadConfig(context).screenOffDisconnectDelaySec) }
-    var smsUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableSmsUpload) }
-    var notifUpload by remember { mutableStateOf(Prefs.loadConfig(context).enableNotificationUpload) }
+    // 响应式配置：服务器切换等外部修改实时刷新本卡片
+    var config by remember { mutableStateOf(Prefs.loadConfig(context)) }
+    DisposableEffect(context) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == Prefs.KEY_CONFIG) config = Prefs.loadConfig(context)
+        }
+        Prefs.registerConfigListener(context, listener)
+        onDispose { Prefs.unregisterConfigListener(context, listener) }
+    }
+
+    val autoSync = config.enableAutoSync
+    val bgUpload = config.enableBackgroundUpload
+    val bgDownload = config.enableBackgroundDownload
+    val stopOnBattery = config.stopPollingOnBatterySaver
+    val stopOnScreenOff = config.stopPollingOnScreenOff
+    val stopOnMobileData = config.disconnectOnMobileData
+    val pollingIntervalSec = config.pollingIntervalSec.coerceAtLeast(1)
+    val screenOffDelaySec = config.screenOffDisconnectDelaySec
+    val smsUpload = config.enableSmsUpload
+    val notifUpload = config.enableNotificationUpload
 
     // 当前激活服务器类型：SyncClipboard 官方服务器显示息屏断开/省电断开设置，
     // 其他模式（WebDAV/S3）保留轮询间隔与息屏/省电停止轮询
-    val isSyncClipboardServer = remember {
-        val cfg = Prefs.loadConfig(context)
-        cfg.servers.getOrNull(cfg.activeServerIndex)?.type == io.github.erenche.syncclipboard.common.model.ServerType.syncclipboard
-    }
+    val isSyncClipboardServer =
+        config.servers.getOrNull(config.activeServerIndex)?.type == io.github.erenche.syncclipboard.common.model.ServerType.syncclipboard
 
     val intervalOptions = remember { listOf(1, 3, 5, 10, 15, 30, 60, 120, 300, 600) }
     val intervalLabels = remember(intervalOptions) {
@@ -396,6 +269,7 @@ fun SyncSettingsCard(context: android.content.Context) {
     }
 
     fun pushConfig(newConfig: AppConfig) {
+        config = newConfig
         try {
             Prefs.saveConfig(context, newConfig)
             val configJson = Json.encodeToString(AppConfig.serializer(), newConfig)
@@ -428,16 +302,7 @@ fun SyncSettingsCard(context: android.content.Context) {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            smsUpload = true
-            val newCfg = Prefs.loadConfig(context).copy(enableSmsUpload = true)
-            try {
-                Prefs.saveConfig(context, newCfg)
-                val payload = android.os.Bundle().apply {
-                    putString("config", Json.encodeToString(AppConfig.serializer(), newCfg))
-                }
-                SyncClipboardBridge.with(context).to("com.android.systemui")
-                    .key(BridgeKeys.PUSH_CONFIG).payload(payload).send()
-            } catch (_: Exception) {}
+            pushConfig(config.copy(enableSmsUpload = true))
         }
         // 拒绝时保持开关关闭
     }
@@ -447,68 +312,52 @@ fun SyncSettingsCard(context: android.content.Context) {
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (isNotificationListenerEnabled()) {
-            notifUpload = true
-            pushConfig(Prefs.loadConfig(context).copy(enableNotificationUpload = true))
+            pushConfig(config.copy(enableNotificationUpload = true))
         }
         // 未授权则保持开关关闭
     }
 
     // 总开关：关闭→子开关一并关闭；打开→若两个子开关都关则默认都开
     fun toggleAutoSync(enabled: Boolean) {
-        autoSync = enabled
-        val config = Prefs.loadConfig(context)
         if (enabled) {
             val restoreUpload = bgUpload || bgDownload
             val newUpload = if (restoreUpload) bgUpload else true
             val newDownload = if (restoreUpload) bgDownload else true
-            bgUpload = newUpload
-            bgDownload = newDownload
             pushConfig(config.copy(enableAutoSync = true, enableBackgroundUpload = newUpload, enableBackgroundDownload = newDownload))
         } else {
-            bgUpload = false
-            bgDownload = false
             pushConfig(config.copy(enableAutoSync = false, enableBackgroundUpload = false, enableBackgroundDownload = false))
         }
     }
 
     // 子开关：当两个子开关都被关闭时，总开关自动关闭（双向联动）
     fun toggleBgUpload(enabled: Boolean) {
-        bgUpload = enabled
-        val config = Prefs.loadConfig(context)
-        val newAutoSync = if (!enabled && !bgDownload) { autoSync = false; false } else true
+        val newAutoSync = !(!enabled && !bgDownload)
         pushConfig(config.copy(enableBackgroundUpload = enabled, enableAutoSync = newAutoSync))
     }
 
     fun toggleBgDownload(enabled: Boolean) {
-        bgDownload = enabled
-        val config = Prefs.loadConfig(context)
-        val newAutoSync = if (!enabled && !bgUpload) { autoSync = false; false } else true
+        val newAutoSync = !(!enabled && !bgUpload)
         pushConfig(config.copy(enableBackgroundDownload = enabled, enableAutoSync = newAutoSync))
     }
 
     fun toggleStopOnBattery(enabled: Boolean) {
-        stopOnBattery = enabled
-        pushConfig(Prefs.loadConfig(context).copy(stopPollingOnBatterySaver = enabled))
+        pushConfig(config.copy(stopPollingOnBatterySaver = enabled))
     }
 
     fun toggleStopOnScreenOff(enabled: Boolean) {
-        stopOnScreenOff = enabled
-        pushConfig(Prefs.loadConfig(context).copy(stopPollingOnScreenOff = enabled))
+        pushConfig(config.copy(stopPollingOnScreenOff = enabled))
     }
 
     fun toggleStopOnMobileData(enabled: Boolean) {
-        stopOnMobileData = enabled
-        pushConfig(Prefs.loadConfig(context).copy(disconnectOnMobileData = enabled))
+        pushConfig(config.copy(disconnectOnMobileData = enabled))
     }
 
     fun updatePollingInterval(sec: Int) {
-        pollingIntervalSec = sec
-        pushConfig(Prefs.loadConfig(context).copy(pollingIntervalSec = sec))
+        pushConfig(config.copy(pollingIntervalSec = sec))
     }
 
     fun updateScreenOffDisconnectDelay(sec: Int) {
-        screenOffDelaySec = sec
-        pushConfig(Prefs.loadConfig(context).copy(screenOffDisconnectDelaySec = sec))
+        pushConfig(config.copy(screenOffDisconnectDelaySec = sec))
     }
 
     fun toggleSmsUpload(enabled: Boolean) {
@@ -517,22 +366,19 @@ fun SyncSettingsCard(context: android.content.Context) {
                 context, android.Manifest.permission.RECEIVE_SMS
             ) == PackageManager.PERMISSION_GRANTED
             if (hasPerm) {
-                smsUpload = true
-                pushConfig(Prefs.loadConfig(context).copy(enableSmsUpload = true))
+                pushConfig(config.copy(enableSmsUpload = true))
             } else {
                 smsPermissionLauncher.launch(android.Manifest.permission.RECEIVE_SMS)
             }
         } else {
-            smsUpload = false
-            pushConfig(Prefs.loadConfig(context).copy(enableSmsUpload = false))
+            pushConfig(config.copy(enableSmsUpload = false))
         }
     }
 
     fun toggleNotificationUpload(enabled: Boolean) {
         if (enabled) {
             if (isNotificationListenerEnabled()) {
-                notifUpload = true
-                pushConfig(Prefs.loadConfig(context).copy(enableNotificationUpload = true))
+                pushConfig(config.copy(enableNotificationUpload = true))
             } else {
                 // 跳转到系统"通知访问权限"设置页，用户授权后返回时由 launcher 回调核对状态
                 try {
@@ -543,8 +389,7 @@ fun SyncSettingsCard(context: android.content.Context) {
                 }
             }
         } else {
-            notifUpload = false
-            pushConfig(Prefs.loadConfig(context).copy(enableNotificationUpload = false))
+            pushConfig(config.copy(enableNotificationUpload = false))
         }
     }
 
@@ -839,16 +684,33 @@ fun AutoSaveSettingsCard(context: android.content.Context) {
     }
 }
 
-// ─── 缓存管理 ─────────────────────────────────────────────────
+// ─── 存储清理（缓存 + 引擎数据合并卡片）───────────────────────
 @Composable
-fun CacheSettingsCard(context: android.content.Context) {
+fun StorageSettingsCard(context: android.content.Context) {
     var cacheSize by remember { mutableStateOf(getCacheSize(context)) }
+    var showCleanupDialog by remember { mutableStateOf(false) }
+    // 引擎侧数据大小（SystemUI 私有目录，需 IPC 查询；null = 查询中/不可用）
+    var engineSize by remember { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun queryEngineSize(): Long? = try {
+        val result = SyncClipboardBridge.with(context)
+            .to(PackageNames.SYSTEM_UI)
+            .key(BridgeKeys.GET_ENGINE_STORAGE_SIZE)
+            .await()
+        result.getLong("bytes", 0L)
+    } catch (_: Exception) {
+        null
+    }
+
+    LaunchedEffect(Unit) { engineSize = queryEngineSize() }
 
     Card(
         modifier = Modifier
             .padding(start = 16.dp, top = 16.dp, end = 16.dp)
             .fillMaxWidth()
     ) {
+        // 清理缓存（app 侧预览文件等，无害操作）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -877,6 +739,54 @@ fun CacheSettingsCard(context: android.content.Context) {
             ) {
                 Text(text = stringResource(R.string.setting_cache_clear))
             }
+        }
+
+        // 清理引擎数据（引擎侧历史/下载/临时文件，破坏性操作需确认）
+        ArrowPreference(
+            title = stringResource(R.string.item_clean_engine_data),
+            summary = engineSize?.let {
+                stringResource(R.string.item_clean_engine_data_summary_size, formatFileSize(it))
+            } ?: stringResource(R.string.item_clean_engine_data_summary),
+            onClick = { showCleanupDialog = true }
+        )
+    }
+
+    OverlayDialog(
+        show = showCleanupDialog,
+        title = stringResource(R.string.item_clean_engine_data),
+        summary = stringResource(R.string.clean_engine_data_confirm),
+        onDismissRequest = { showCleanupDialog = false }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            TextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = { showCleanupDialog = false },
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                text = stringResource(R.string.action_confirm),
+                onClick = {
+                    showCleanupDialog = false
+                    SyncClipboardBridge.with(context)
+                        .to(PackageNames.SYSTEM_UI)
+                        .key(BridgeKeys.CLEAR_ENGINE_DATA)
+                        .send()
+                    // 引擎异步清理，稍后重查大小
+                    scope.launch {
+                        kotlinx.coroutines.delay(1500)
+                        engineSize = queryEngineSize()
+                    }
+                    android.widget.Toast.makeText(
+                        context,
+                        R.string.clean_engine_data_done,
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

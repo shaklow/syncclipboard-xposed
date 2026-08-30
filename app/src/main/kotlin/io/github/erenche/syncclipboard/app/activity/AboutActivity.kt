@@ -86,30 +86,6 @@ fun AboutScreen() {
             }
         }
 
-        // 工作原理
-        item("how_it_works") {
-            Card(
-                modifier = Modifier
-                    .padding(start = 16.dp, top = 16.dp, end = 16.dp)
-                    .fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = stringResource(R.string.about_how_it_works_title),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MiuixTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(R.string.about_how_it_works_text),
-                        fontSize = 14.sp,
-                        color = MiuixTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-
         // 许可协议
         item("license") {
             Card(
@@ -149,6 +125,25 @@ fun AboutScreen() {
                             data = Uri.parse("https://github.com/shaklow/syncclipboard-xposed")
                         }
                         context.startActivity(intent)
+                    }
+                )
+            }
+        }
+
+        // 开放源代码许可（点击进入独立查看页）
+        item("oss_licenses") {
+            Card(
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                ArrowPreference(
+                    title = stringResource(R.string.about_open_source_licenses),
+                    summary = stringResource(R.string.about_open_source_licenses_summary),
+                    onClick = {
+                        context.startActivity(
+                            Intent(context, OpenSourceLicensesActivity::class.java)
+                        )
                     }
                 )
             }

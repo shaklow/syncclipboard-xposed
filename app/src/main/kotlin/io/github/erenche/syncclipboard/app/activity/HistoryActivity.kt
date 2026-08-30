@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
@@ -38,6 +39,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
@@ -113,7 +115,10 @@ class HistoryActivity : BaseActivity() {
  */
 @OptIn(FlowPreview::class)
 @Composable
-fun HistoryScreen() {
+fun HistoryScreen(
+    bottomPadding: Dp = 0.dp,
+    embedded: Boolean = false,
+) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -125,6 +130,15 @@ fun HistoryScreen() {
     var searchQuery by remember { mutableStateOf("") }
     var pageSize by remember { mutableStateOf(50) }
     var currentPage by remember { mutableStateOf(1) }
+    // 列表滚动状态：翻页后内容切换即回顶（无可视滚动跳变）
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // 翻页来源：顶部翻页条 = 内容切换式（不回顶，仅条目渐显）；
+    // 底部翻页条 = 瞬移回顶 + 条目渐显（不做滚动动画）
+    var pageSourceBottom by remember { mutableStateOf(false) }
+    // 条目区渐显动画（翻页时播一次；完成后值恒定 1f，滚动不会重放/闪变）
+    val pageFade = remember { androidx.compose.animation.core.Animatable(1f) }
+    // 翻页加载中：禁用分页按钮、指示器显示加载态，避免重复点击
+    var paging by remember { mutableStateOf(false) }
     // 多选模式：选中的记录 id 集合，非空即进入多选模式
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectionMode = selectedIds.isNotEmpty()
@@ -176,6 +190,7 @@ fun HistoryScreen() {
         } finally {
             loading = false
             refreshing = false
+            paging = false
         }
     }
 
@@ -274,9 +289,29 @@ fun HistoryScreen() {
     // 首次进入加载第 1 页
     LaunchedEffect(Unit) { loadHistoryPage(1) }
 
-    // 翻页 / 切换每页数量 → 重新加载对应页
+    // 翻页 / 切换每页数量 → 重新加载对应页。
+    // 动画设计（内容切换式，全部渐显）：
+    // - 顶部翻页 / 切页数 / 搜索重置：内容替换后保持当前滚动位置（不回顶），条目渐显
+    // - 底部翻页：内容替换后瞬移回顶（内容已更换，无可视滚动），条目渐显
+    //   注意：不做 animateScrollToItem(0) 滚动动画（用户反馈效果不佳）；
+    //   不使用 animateItem 的 fadeIn —— 它在条目滚动回收后会重放导致闪变。
     LaunchedEffect(currentPage, pageSize) {
-        if (!loading || items.isNotEmpty()) loadHistoryPage(currentPage)
+        if (!loading || items.isNotEmpty()) {
+            loadHistoryPage(currentPage)
+            if (pageSourceBottom) {
+                // 底部翻页：瞬移回顶（新页内容已在，无可见滚动）
+                listState.scrollToItem(0)
+            }
+            // 条目渐显（仅条目，搜索框/统计/分页条不动；播放一次，完成后值恒定）
+            pageFade.snapTo(0f)
+            pageFade.animateTo(
+                1f,
+                animationSpec = androidx.compose.animation.core.tween(
+                    durationMillis = 240,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                )
+            )
+        }
     }
 
     // 搜索框防抖（500ms）：重置到第 1 页并触发服务端查询
@@ -360,10 +395,12 @@ fun HistoryScreen() {
             stringResource(R.string.history_selected_count, selectedIds.size)
         else
             stringResource(R.string.activity_history),
-        canBack = true,
-        onBack = { if (selectionMode) selectedIds = emptySet() else activity?.finish() },
+        canBack = !embedded,
+        onBack = { if (selectionMode) selectedIds = emptySet() else if (!embedded) activity?.finish() },
         isRefreshing = refreshing,
         onRefresh = { refreshFromServer() },
+        bottomPadding = bottomPadding,
+        listState = listState,
         actions = {
             if (!loading && items.isNotEmpty()) {
                 if (selectionMode) {
@@ -563,7 +600,14 @@ fun HistoryScreen() {
                             HistoryPaginationBar(
                                 currentPage = currentPage,
                                 totalPages = totalPages,
-                                onPageChange = { currentPage = it }
+                                paging = paging,
+                                onPageChange = { page ->
+                                    if (!paging && page != currentPage) {
+                                        paging = true
+                                        pageSourceBottom = false
+                                        currentPage = page
+                                    }
+                                }
                             )
                         }
                     }
@@ -578,7 +622,15 @@ fun HistoryScreen() {
                             onToggleSelect = { toggleSelect(historyItem.id) },
                             onDelete = { deleteItem(historyItem.id) },
                             onToggleStar = { toggleStarItem(historyItem.id) },
-                            modifier = Modifier.animateItem(),
+                            // 禁用 item 级 fadeIn（滚动回收会重放导致闪变），只保留弹簧位移；
+                            // 渐显由 pageFade 一次性驱动，完成值恒定不闪
+                            modifier = Modifier
+                                .animateItem(
+                                    fadeInSpec = null,
+                                    placementSpec = folmeSpring(damping = 0.9f, response = 0.22f),
+                                    fadeOutSpec = null,
+                                )
+                                .graphicsLayer { alpha = pageFade.value },
                         )
                     }
 
@@ -587,7 +639,14 @@ fun HistoryScreen() {
                             HistoryPaginationBar(
                                 currentPage = currentPage,
                                 totalPages = totalPages,
-                                onPageChange = { currentPage = it }
+                                paging = paging,
+                                onPageChange = { page ->
+                                    if (!paging && page != currentPage) {
+                                        paging = true
+                                        pageSourceBottom = true
+                                        currentPage = page
+                                    }
+                                }
                             )
                         }
                     }
@@ -604,6 +663,7 @@ fun HistoryScreen() {
 private fun HistoryPaginationBar(
     currentPage: Int,
     totalPages: Int,
+    paging: Boolean,
     onPageChange: (Int) -> Unit,
 ) {
     Row(
@@ -615,7 +675,7 @@ private fun HistoryPaginationBar(
     ) {
         Button(
             onClick = { onPageChange(currentPage - 1) },
-            enabled = currentPage > 1,
+            enabled = !paging && currentPage > 1,
             minHeight = 36.dp,
             minWidth = 0.dp,
             insideMargin = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
@@ -629,7 +689,7 @@ private fun HistoryPaginationBar(
         )
         Button(
             onClick = { onPageChange(currentPage + 1) },
-            enabled = currentPage < totalPages,
+            enabled = !paging && currentPage < totalPages,
             minHeight = 36.dp,
             minWidth = 0.dp,
             insideMargin = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
@@ -678,7 +738,7 @@ private fun SwipeableHistoryCard(
         // 注意用阈值而非 ==0：spring 回弹浮点不会精确归零
         val bgAlpha by animateFloatAsState(
             targetValue = if (abs(offsetX) < 1f) 0f else 1f,
-            animationSpec = folmeSpring(damping = 0.9f, response = 0.2f),
+            animationSpec = folmeSpring(damping = 0.9f, response = 0.05f),
             label = "swipeBgAlpha",
         )
         Box(
@@ -761,7 +821,7 @@ private fun SwipeableHistoryCard(
                                     // 左滑超过阈值 → 滑出 + 删除
                                     settleJob = scope.launch {
                                         val anim = Animatable(offsetX)
-                                        anim.animateTo(-cardWidthPx.toFloat(), folmeSpring(damping = 0.9f, response = 0.3f)) { offsetX = value }
+                                        anim.animateTo(-cardWidthPx.toFloat(), folmeSpring(damping = 0.9f, response = 0.24f)) { offsetX = value }
                                         currentOnDelete()
                                     }
                                 }

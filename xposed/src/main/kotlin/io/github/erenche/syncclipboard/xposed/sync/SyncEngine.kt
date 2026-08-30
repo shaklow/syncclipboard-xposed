@@ -26,12 +26,14 @@ import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
+import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
@@ -67,6 +69,9 @@ class SyncEngine private constructor() {
         fun getInstance(): SyncEngine = instance ?: synchronized(this) {
             instance ?: SyncEngine().also { instance = it }
         }
+
+        /** 引擎是否已初始化（仅 SystemUI 进程为 true） */
+        fun isInitialized(): Boolean = instance?.appContext != null
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -243,8 +248,8 @@ class SyncEngine private constructor() {
         // 监听本 App 卸载：清理引擎侧数据（历史库/历史文件/下载目录/缓存）
         registerUninstallMonitor()
 
-        // 启动 SignalR 推送连接（仅官方服务器模式生效；省电/息屏/移动网络暂停时不启动）
-        if (!powerPauseApplied) signalRClient?.start()
+        // 启动 SignalR 推送连接（仅官方服务器模式生效；自动同步关闭或省电/息屏/移动网络暂停时不启动）
+        if (config.enableAutoSync && !powerPauseApplied) signalRClient?.start()
 
         // 远程轮询 — 定期从服务器拉取新内容
         scope.launch {
@@ -365,8 +370,10 @@ class SyncEngine private constructor() {
 
     // ─── 息屏/省电断开 SignalR（仅 SyncClipboard 官方服务器模式）───
 
-    /** SignalR 断开功能是否可用：官方服务器模式且开启 SignalR 推送 */
+    /** SignalR 断开功能是否可用：自动同步开启 + 官方服务器模式且开启 SignalR 推送。
+     *  自动同步关闭时 SignalR 本就不应在线，息屏/省电断开逻辑无意义。 */
     private fun isSignalRDisconnectEnabled(): Boolean {
+        if (!config.enableAutoSync) return false
         val server = config.servers.getOrNull(config.activeServerIndex)
         return server?.type == ServerType.syncclipboard && config.enableSignalRPush
     }
@@ -433,6 +440,11 @@ class SyncEngine private constructor() {
      *  （用户在省电模式已开启时才打开“省电停止”开关）、轮询状态循环（广播
      *  丢失兜底）时调用，暂停与恢复两种方向都覆盖。 */
     private fun reevaluatePowerSaveState() {
+        // 自动同步关闭时无暂停语义，清除残留标志后直接返回
+        if (!config.enableAutoSync) {
+            batterySaverPaused = false
+            return
+        }
         if (!isSignalRDisconnectEnabled() && !batterySaverPaused) return
         val pm = appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
         val shouldPause = pm.isPowerSaveMode && config.stopPollingOnBatterySaver
@@ -523,6 +535,8 @@ class SyncEngine private constructor() {
                 ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
         } ?: false
         networkWasAvailable = hasNetwork
+        // 自动同步关闭时无在线连接可暂停，不评估移动网络暂停（标志已随总开关关闭清除）
+        if (!config.enableAutoSync) return
         val shouldPause = config.disconnectOnMobileData && !isWifi
         if (shouldPause != mobileDataPaused) {
             mobileDataPaused = shouldPause
@@ -624,6 +638,34 @@ class SyncEngine private constructor() {
             cm?.removePrimaryClipChangedListener(clipChangedListener)
         } catch (_: Exception) {}
         Logger.info(TAG, "SyncEngine stopped")
+    }
+
+    /**
+     * 完整拆除引擎（模块热重载前调用）。
+     *
+     * 与 [stop] 的区别：stop 仅停止监听与轮询标志，协程与资源仍存活；
+     * shutdown 额外取消全部协程、释放 SignalR/数据库连接、拆除 IPC 路由并复位单例，
+     * 确保旧代模块代码不再持有任何系统引用（ClipboardManager/广播/网络回调），
+     * 新代模块可通过 [initialize] 干净重建。
+     */
+    fun shutdown() {
+        if (appContext == null) return
+        stop()
+        signalRClient?.dispose()
+        signalRClient = null
+        isSignalRConnected = false
+        historyPushConsumer?.cancel()
+        historyPushConsumer = null
+        // 取消轮询循环与所有后台协程（含 delay 中的等待）
+        scope.coroutineContext[Job]?.cancelChildren()
+        // 拆除 IPC 路由：反注册 receiver，防止新旧两代并存双重处理
+        SyncClipboardBridge.teardown()
+        // 关闭历史数据库连接（旧代 Room 实例随类加载器一起废弃）
+        historyService?.let { _ -> AppDatabase.closeInstance() }
+        historyService = null
+        appContext = null
+        synchronized(Companion) { instance = null }
+        Logger.info(TAG, "SyncEngine shutdown (hot reload)")
     }
 
     /**
@@ -764,8 +806,8 @@ class SyncEngine private constructor() {
         rebuildApiClient()  // 内部会重建 SignalR 客户端
         // 重新评估省电模式：用户可能在省电模式已开启时才打开“省电停止”开关
         reevaluatePowerSaveState()
-        // 配置变更后重启 SignalR 连接（若已创建且未被息屏/省电暂停）
-        if (isRunning && !powerPauseApplied) {
+        // 配置变更后重启 SignalR 连接（自动同步开启且未被息屏/省电暂停时）
+        if (isRunning && newConfig.enableAutoSync && !powerPauseApplied) {
             signalRClient?.start()
         }
         // 同步日志开关到 Logger
@@ -779,9 +821,17 @@ class SyncEngine private constructor() {
             appContext?.let { Prefs.resetHistoryLastSyncTime(it) }
             Logger.info(TAG, "Server changed, history sync cursor reset")
         }
-        // 总开关关闭时立即置为未连接并停止轮询
+        // 总开关关闭时：立即置为未连接并停止轮询；断开 SignalR 并清除
+        // 息屏/省电/移动网络暂停标志，避免状态残留导致亮屏后触发无意义的 resume 流程
         if (!newConfig.enableAutoSync) {
             setConnected(false)
+            signalRClient?.stop()
+            screenOffDisconnectJob?.cancel()
+            screenOffDisconnectJob = null
+            screenOffPaused = false
+            batterySaverPaused = false
+            mobileDataPaused = false
+            powerPauseApplied = false
             if (isPollingActive) {
                 isPollingActive = false
                 notifySyncStateChanged()
@@ -1498,6 +1548,18 @@ class SyncEngine private constructor() {
         }
     }
 
+    /** 清理引擎下载目录：仅保留当前文件，其余删除。
+     *  历史归档副本在 history_files/ 由 HistoryService 的磁盘 LRU 管理，下载目录只做"当前文件"暂存。 */
+    private fun trimDownloadsDir(context: Context, keepName: String) {
+        try {
+            val dir = java.io.File(context.filesDir, "downloads")
+            if (!dir.isDirectory) return
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name != keepName) f.delete()
+            }
+        } catch (_: Exception) {}
+    }
+
     /** 将 content:// URI 复制到临时文件，返回临时 File */
     private fun copyUriToTempFile(
         context: Context,
@@ -1551,6 +1613,8 @@ class SyncEngine private constructor() {
                 downloadedFileUri = android.net.Uri.fromFile(destFile)
                 downloadedFilePath = destPath
                 Logger.info(TAG, "File downloaded: $name -> $destPath (size=${destFile.length()})")
+                // downloads/ 仅保留"当前文件"：历史归档由 HistoryService 复制到 history_files/（受磁盘 LRU 管理）
+                trimDownloadsDir(context, name)
                 }
             } else {
                 Logger.debug(TAG, "downloadAndApplyContent: no file data, skipping download")
@@ -1914,6 +1978,8 @@ class SyncEngine private constructor() {
      *  获取 historySyncMutex 避免与 syncHistory 并发，复用 processPatchItem 逻辑。
      *  仅 SyncClipboard 官方服务器模式生效；WebDAV/S3 不支持历史 PATCH，仅做本地变更。 */
     private suspend fun pushSingleHistoryUpdate(id: String) {
+        // 历史同步总开关关闭时：完全断开与服务器的历史交互（含星标/置顶等单条元数据推送）
+        if (!config.enableHistorySync) return
         val hs = getHistoryService() ?: return
         val client = apiClient ?: return
         val server = config.servers.getOrNull(config.activeServerIndex)
@@ -2008,6 +2074,32 @@ class SyncEngine private constructor() {
 
             onCommand(BridgeKeys.CLEAR_ENGINE_DATA) {
                 clearEngineData()
+            }
+
+            onQuery(BridgeKeys.GET_ENGINE_STORAGE_SIZE) {
+                val ctx = appContext
+                val bytes = if (ctx == null) 0L else try {
+                    var total = 0L
+                    // 历史数据库文件（含 WAL/SHM）
+                    listOf("clipboard_history.db", "clipboard_history.db-wal", "clipboard_history.db-shm")
+                        .forEach { name ->
+                            val f = java.io.File(ctx.filesDir, name)
+                            if (f.isFile) total += f.length()
+                        }
+                    // 历史文件目录与下载目录
+                    listOf("history_files", "downloads").forEach { name ->
+                        val dir = java.io.File(ctx.filesDir, name)
+                        if (dir.isDirectory) {
+                            dir.walkTopDown().filter { it.isFile }.forEach { total += it.length() }
+                        }
+                    }
+                    // 上传临时文件
+                    ctx.cacheDir.listFiles()
+                        ?.filter { it.isFile && it.name.startsWith("upload_") }
+                        ?.forEach { total += it.length() }
+                    total
+                } catch (_: Exception) { 0L }
+                reply(Bundle().apply { putLong("bytes", bytes) })
             }
 
             onQuery(BridgeKeys.GET_DOWNLOADED_FILE) {

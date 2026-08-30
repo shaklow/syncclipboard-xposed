@@ -48,10 +48,6 @@
             android:label="@string/activity_settings" />
 
         <activity
-            android:name=".activity.ServerConfigActivity"
-            android:label="@string/activity_server_config" />
-
-        <activity
             android:name=".activity.HistoryActivity"
             android:label="@string/activity_history" />
 
@@ -77,16 +73,20 @@
         </activity>
 
         <activity
-            android:name=".activity.MoreActivity"
-            android:label="@string/item_more" />
-
-        <activity
             android:name=".activity.LogActivity"
             android:label="@string/item_log" />
 
         <activity
             android:name=".activity.AboutActivity"
             android:label="@string/activity_about" />
+
+        <activity
+            android:name=".activity.ThemeSettingsActivity"
+            android:label="@string/setting_theme" />
+
+        <activity
+            android:name=".activity.OpenSourceLicensesActivity"
+            android:label="@string/about_open_source_licenses" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -35,5 +35,11 @@ abstract class AppDatabase : RoomDatabase() {
                 ).build().also { instance = it }
             }
         }
+
+        /** 关闭并复位单例（模块热重载前调用，释放旧代数据库连接） */
+        fun closeInstance() {
+            instance?.let { db -> runCatching { db.close() } }
+            instance = null
+        }
     }
 }
