@@ -2143,10 +2143,11 @@ class SyncEngine private constructor() {
                 val offset = data.getInt("offset", 0)
                 val limit = data.getInt("limit", 50)
                 val searchText = data.getString("searchText")
+                val typeFilter = data.getString("typeFilter")?.takeIf { it.isNotBlank() }
                 val hs = getHistoryService()
                 if (hs != null) {
-                    val pageItems = hs.getPaged(offset, limit, searchText)
-                    val totalCount = hs.count(searchText)
+                    val pageItems = hs.getPaged(offset, limit, searchText, typeFilter)
+                    val totalCount = hs.count(searchText, typeFilter)
                     val itemsJson = Json.encodeToString(
                         ListSerializer(HistoryItem.serializer()), pageItems
                     )

@@ -46,6 +46,7 @@ import androidx.core.content.ContextCompat
 import android.graphics.BitmapFactory
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
+import io.github.erenche.syncclipboard.app.compose.NavigationBackIcon
 import io.github.erenche.syncclipboard.app.net.ServerApi
 import io.github.erenche.syncclipboard.app.transfer.HistoryTransferQueue
 import io.github.erenche.syncclipboard.app.transfer.TransferState
@@ -88,6 +89,7 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Filter
 import top.yukonga.miuix.kmp.icon.extended.More
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
@@ -128,6 +130,10 @@ fun HistoryScreen(
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    // 类型筛选：null = 全部；'starred' = 收藏；'Text'/'Image'/'File' = 按类型
+    var typeFilter by remember { mutableStateOf<String?>(null) }
+    // 筛选菜单弹出状态（跟随筛选图标）
+    var showFilterPopup by remember { mutableStateOf(false) }
     var pageSize by remember { mutableStateOf(50) }
     var currentPage by remember { mutableStateOf(1) }
     // 列表滚动状态：翻页后内容切换即回顶（无可视滚动跳变）
@@ -172,6 +178,7 @@ fun HistoryScreen(
                 putInt("offset", offset)
                 putInt("limit", pageSize)
                 if (searchQuery.isNotBlank()) putString("searchText", searchQuery)
+                putString("typeFilter", typeFilter)
             }
             val bundle = SyncClipboardBridge.with(context)
                 .to("com.android.systemui")
@@ -397,10 +404,84 @@ fun HistoryScreen(
             stringResource(R.string.activity_history),
         canBack = !embedded,
         onBack = { if (selectionMode) selectedIds = emptySet() else if (!embedded) activity?.finish() },
+        // 左上角：返回键（独立页时）+ 筛选图标（标题左边）
+        navigationIcon = {
+            if (!embedded) NavigationBackIcon {
+                if (selectionMode) selectedIds = emptySet() else activity?.finish()
+            }
+            // 筛选选项：值 → 标签（null = 全部）
+            val filterOptions = listOf(
+                null to stringResource(R.string.history_filter_all),
+                "Text" to stringResource(R.string.type_text),
+                "Image" to stringResource(R.string.type_image),
+                "File" to stringResource(R.string.type_file),
+                "starred" to stringResource(R.string.history_star),
+            )
+            Box {
+                WindowListPopup(
+                    show = showFilterPopup,
+                    popupPositionProvider = ListPopupDefaults.ContextMenuPositionProvider,
+                    alignment = PopupPositionProvider.Align.TopStart,
+                    onDismissRequest = { showFilterPopup = false },
+                    content = {
+                        ListPopupColumn {
+                            filterOptions.forEachIndexed { index, (_, label) ->
+                                DropdownImpl(
+                                    text = label,
+                                    optionSize = filterOptions.size,
+                                    isSelected = typeFilter == filterOptions[index].first,
+                                    index = index,
+                                    onSelectedIndexChange = { selectedIdx ->
+                                        showFilterPopup = false
+                                        val newFilter = filterOptions[selectedIdx].first
+                                        if (newFilter != typeFilter) {
+                                            typeFilter = newFilter
+                                            // 筛选切换即时生效：回到第 1 页
+                                            if (currentPage != 1) currentPage = 1
+                                            else scope.launch { loadHistoryPage(1) }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+                IconButton(
+                    onClick = { showFilterPopup = true },
+                    holdDownState = showFilterPopup,
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Filter,
+                        contentDescription = stringResource(R.string.history_filter),
+                        tint = if (typeFilter != null) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+        },
         isRefreshing = refreshing,
         onRefresh = { refreshFromServer() },
         bottomPadding = bottomPadding,
         listState = listState,
+        // 固定搜索条：搜索框占满整行，随顶栏常驻不随列表滚动
+        stickyContent = {
+            val tfValue = remember(searchQuery) {
+                TextFieldValue(
+                    text = searchQuery,
+                    selection = TextRange(searchQuery.length)
+                )
+            }
+            TextField(
+                label = stringResource(R.string.history_search),
+                value = tfValue,
+                onValueChange = { searchQuery = it.text },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                singleLine = true,
+            )
+        },
         actions = {
             if (!loading && items.isNotEmpty()) {
                 if (selectionMode) {
@@ -523,24 +604,6 @@ fun HistoryScreen(
             }
 
             else -> {
-                item("search_bar") {
-                    val tfValue = remember(searchQuery) {
-                        TextFieldValue(
-                            text = searchQuery,
-                            selection = TextRange(searchQuery.length)
-                        )
-                    }
-                    TextField(
-                        label = stringResource(R.string.history_search),
-                        value = tfValue,
-                        onValueChange = { searchQuery = it.text },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        singleLine = true,
-                    )
-                }
-
                 item("stats_row") {
                     Row(
                         modifier = Modifier

@@ -1,7 +1,9 @@
 package io.github.erenche.syncclipboard.app.compose
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -59,11 +61,15 @@ fun AppToolBarListContainer(
     title: String = "",
     canBack: Boolean = false,
     onBack: () -> Unit = {},
+    /** 自定义左上角图标区（提供时替代默认返回键；内部可组合返回键 + 附加图标） */
+    navigationIcon: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     isRefreshing: Boolean = false,
     onRefresh: (() -> Unit)? = null,
     bottomPadding: Dp = 0.dp,
     listState: LazyListState? = null,
+    /** 固定在顶栏下方的常驻内容（如搜索框），随顶栏毛玻璃背景固定，不随列表滚动 */
+    stickyContent: (@Composable () -> Unit)? = null,
     content: LazyListScope.() -> Unit
 ) {
     AppTheme {
@@ -75,14 +81,28 @@ fun AppToolBarListContainer(
         Scaffold(
             topBar = {
                 BlurredBar(backdrop) {
-                    SmallTopAppBar(
-                        title = title,
-                        navigationIcon = {
-                            if (canBack) NavigationBackIcon(onBack)
-                        },
-                        actions = actions,
-                        color = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
-                    )
+                    Column {
+                        SmallTopAppBar(
+                            title = title,
+                            navigationIcon = {
+                                when {
+                                    navigationIcon != null -> navigationIcon()
+                                    canBack -> NavigationBackIcon(onBack)
+                                }
+                            },
+                            actions = actions,
+                            color = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
+                        )
+                        // 常驻固定区：背景色与顶栏一致（毛玻璃关闭时）
+                        if (stickyContent != null) {
+                            Box(
+                                modifier = if (blurActive) Modifier
+                                else Modifier.background(MiuixTheme.colorScheme.surface)
+                            ) {
+                                stickyContent()
+                            }
+                        }
+                    }
                 }
             }
         ) { paddingValues ->
