@@ -25,6 +25,7 @@ import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
+import io.github.erenche.syncclipboard.xposed.BuildConfig
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
 import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
@@ -54,7 +55,7 @@ import kotlinx.serialization.json.Json
  * 负责监听剪贴板变化（来自 ClipboardServiceHooker）、上传/下载、历史记录、IPC 路由。
  *
  * 去重策略：
- * - onLocalClipboardChanged 的哈希检查在调用线程同步执行，防止竞态
+ * - onLocalClipboardChanged 的哈希 check-and-set 由 localDedupLock 保护，防止竞态
  * - system_server 中不注册 OnPrimaryClipChangedListener / 不轮询本地剪贴板
  *   仅依赖 ClipboardServiceHooker 提供的事件
  */
@@ -106,9 +107,12 @@ class SyncEngine private constructor() {
 
     private var processName: String = "unknown"
 
-    /** 本地哈希去重 — 同步检查防止竞态 */
+    /** 本地哈希去重 — 锁保护的原子 check-and-set */
     @Volatile
     private var lastLocalHash: String? = null
+
+    /** 去重锁：listener 后台化后多线程并发触发，保证 check-and-set 原子性 */
+    private val localDedupLock = Any()
     @Volatile
     private var lastRemoteHash: String? = null
 
@@ -203,6 +207,25 @@ class SyncEngine private constructor() {
         appContext = context.applicationContext
         processName = getProcessName(context)
         Logger.info(TAG, "initialize() process=$processName")
+
+        // Debug 构建开启严格模式：主线程磁盘/网络违规与资源泄露（含 PFD）告警到 logcat
+        if (BuildConfig.DEBUG) {
+            android.os.StrictMode.setThreadPolicy(
+                android.os.StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .detectNetwork()
+                    .penaltyLog()
+                    .build()
+            )
+            android.os.StrictMode.setVmPolicy(
+                android.os.StrictMode.VmPolicy.Builder()
+                    .detectLeakedClosableObjects()
+                    .detectLeakedSqlLiteObjects()
+                    .penaltyLog()
+                    .build()
+            )
+        }
 
         config = Prefs.loadConfig(context)
         // 加载持久化的历史同步游标（增量同步用）
@@ -600,9 +623,12 @@ class SyncEngine private constructor() {
         val ctx = appContext ?: return@OnPrimaryClipChangedListener
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
             as? android.content.ClipboardManager ?: return@OnPrimaryClipChangedListener
+        // 主线程仅取 ClipData 快照；provider 查询（跨进程 Binder）转后台执行
         val clip = cm.primaryClip ?: return@OnPrimaryClipChangedListener
-        val content = extractFromClip(ctx, clip) ?: return@OnPrimaryClipChangedListener
-        onLocalClipboardChanged(content)
+        scope.launch {
+            val content = extractFromClip(ctx, clip) ?: return@launch
+            onLocalClipboardChanged(content)
+        }
     }
 
     fun stop() {
@@ -749,9 +775,9 @@ class SyncEngine private constructor() {
     }
 
     /**
-     * 当检测到本地剪贴板变化时由 ClipboardServiceHooker / ClipboardHooker / Listener 调用。
+     * 当检测到本地剪贴板变化时由 clipChangedListener 调用（后台线程）。
      *
-     * 哈希去重在调用线程同步执行，防止多个调用者竞态导致重复上传。
+     * 哈希去重以 [localDedupLock] 保护 check-and-set，多线程触发不会重复上传。
      *
      * @param force 是否强制处理（跳过去重），用于手动上传
      */
@@ -764,8 +790,10 @@ class SyncEngine private constructor() {
             ?: if (content.hasData && content.fileUri != null) HashUtils.sha256(content.fileUri!!)
             else HashUtils.sha256(content.text)
 
-        if (!force && hash.equals(lastLocalHash, ignoreCase = true)) return
-        lastLocalHash = hash
+        synchronized(localDedupLock) {
+            if (!force && hash.equals(lastLocalHash, ignoreCase = true)) return
+            lastLocalHash = hash
+        }
 
         scope.launch {
             try {
@@ -2103,20 +2131,28 @@ class SyncEngine private constructor() {
             }
 
             onQuery(BridgeKeys.GET_DOWNLOADED_FILE) {
-                // 查询引擎下载目录中已存在的文件，命中则直接返回字节（≤2MB），
-                // app 端预览免走一次网络下载。Binder 事务限制约 1MB，留余量。
+                // 返回引擎下载目录中已存在文件的 FD（跨进程零拷贝，任意大小），
+                // app 端预览免走一次网络下载。FD 由 bridge 在传输后统一关闭防泄露。
                 val fileName = data.getString("fileName")
                 if (fileName.isNullOrBlank()) {
                     reply(Bundle.EMPTY)
                     return@onQuery
                 }
+                var pfd: android.os.ParcelFileDescriptor? = null
                 try {
                     val ctx = appContext
                     if (ctx != null) {
-                        val file = java.io.File(java.io.File(ctx.filesDir, "downloads"), fileName)
-                        if (file.isFile && file.length() in 1..2_000_000L) {
+                        val dir = java.io.File(ctx.filesDir, "downloads")
+                        val file = java.io.File(dir, fileName)
+                        // canonical 路径校验：拒绝 ../ 穿越出下载目录
+                        if (file.canonicalPath.startsWith(dir.canonicalPath + java.io.File.separator)
+                            && file.isFile && file.length() > 0
+                        ) {
+                            pfd = android.os.ParcelFileDescriptor.open(
+                                file, android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                            )
                             reply(Bundle().apply {
-                                putByteArray("bytes", file.readBytes())
+                                putParcelable("pfd", pfd)
                                 putLong("size", file.length())
                             })
                             return@onQuery
@@ -2124,6 +2160,8 @@ class SyncEngine private constructor() {
                     }
                     reply(Bundle.EMPTY)
                 } catch (e: Exception) {
+                    // open 成功但 reply 前异常：立即关闭，避免 SystemUI 侧泄露
+                    runCatching { pfd?.close() }
                     Logger.warn(TAG, "GET_DOWNLOADED_FILE failed: ${e.message}")
                     reply(Bundle.EMPTY)
                 }

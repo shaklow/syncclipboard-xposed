@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import androidx.core.content.ContextCompat
 import io.github.erenche.syncclipboard.common.util.Logger
 import kotlinx.coroutines.CompletableDeferred
@@ -81,9 +82,11 @@ object SyncClipboardBridge {
 
             bridgeScope.launch {
                 val callback = IBridgeCallback.Stub.asInterface(binder)
+                var result: Bundle? = null
                 try {
-                    val result = handler(data) ?: Bundle.EMPTY
-                    callback.onReply(result)
+                    val r = handler(data) ?: Bundle.EMPTY
+                    result = r
+                    callback.onReply(r)
                 } catch (e: Exception) {
                     Logger.warn(TAG, "Bridge handler error for key=$key: ${e.message}")
                     try {
@@ -91,6 +94,10 @@ object SyncClipboardBridge {
                     } catch (_: Exception) {
                         // 回调进程（app）可能已死，忽略 DeadObjectException
                     }
+                } finally {
+                    // Binder 传输结束后 FD 已复制到对端（或对端已死），关闭本进程副本防泄露。
+                    // 同进程直调不经过此处，不受影响。
+                    result?.let { closeParcelFileDescriptors(it) }
                 }
             }
         }
@@ -178,6 +185,19 @@ object SyncClipboardBridge {
         }
     }
 
+    /**
+     * 关闭 [Bundle] 持有的所有 [ParcelFileDescriptor]（含一层嵌套 Bundle）。
+     * 跨进程传输完成后由持有方调用，防止 FD 泄露；对端持有 Binder 复制的独立副本，不受影响。
+     */
+    private fun closeParcelFileDescriptors(bundle: Bundle) {
+        for (key in bundle.keySet()) {
+            when (val value = bundle.get(key)) {
+                is ParcelFileDescriptor -> runCatching { value.close() }
+                is Bundle -> closeParcelFileDescriptors(value)
+            }
+        }
+    }
+
     // ─── 内部作用域类 ──────────────────────────────────────────────
 
     /**
@@ -202,7 +222,12 @@ object SyncClipboardBridge {
             handlers[key] = { data ->
                 val deferred = CompletableDeferred<Bundle>()
                 val scope = QueryScope(data, deferred)
-                scope.action()
+                try {
+                    scope.action()
+                } catch (e: Throwable) {
+                    // reply 之后仍抛异常：结果已产生则照常返回（其中 FD 由 bridge 统一关闭）
+                    if (!deferred.isCompleted) throw e
+                }
                 deferred.await()
             }
         }
@@ -256,13 +281,19 @@ object SyncClipboardBridge {
          * @return 服务端回传的 [Bundle]
          */
         suspend fun await(timeout: Long = 3000): Bundle {
+            val deferred = CompletableDeferred<Bundle>()
             return try {
                 withTimeout(timeout) {
-                    val deferred = CompletableDeferred<Bundle>()
-                    executeInternal { deferred.complete(it) }
+                    executeInternal { bundle ->
+                        if (!deferred.complete(bundle)) {
+                            // 等待方已超时放弃：关闭包内 FD，防本进程泄露
+                            closeParcelFileDescriptors(bundle)
+                        }
+                    }
                     deferred.await()
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                deferred.cancel()
                 Bundle.EMPTY
             }
         }

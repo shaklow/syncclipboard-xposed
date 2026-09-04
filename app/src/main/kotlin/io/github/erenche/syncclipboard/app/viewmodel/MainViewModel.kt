@@ -307,11 +307,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Logger.info("MainViewModel", "Reusing cached remote file: ${destFile.name}")
                 return destFile
             }
-            // 引擎已下载过该文件：直接取字节写入本地，省一次网络下载（限 2MB）
-            val engineBytes = fetchEngineDownloadedFile(profile.dataName!!)
-            if (engineBytes != null) {
-                destFile.writeBytes(engineBytes)
-                Logger.info("MainViewModel", "Reused engine-downloaded file: ${destFile.name}, size=${engineBytes.size}")
+            // 引擎已下载过该文件：通过 FD 流式拷贝到本地，省一次网络下载（任意大小）
+            if (copyEngineDownloadedFile(profile.dataName!!, destFile)) {
+                Logger.info("MainViewModel", "Reused engine-downloaded file: ${destFile.name}, size=${destFile.length()}")
                 return destFile
             }
             val api = ServerApi(server)
@@ -333,19 +331,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 向引擎查询已下载的文件字节（≤2MB），未命中返回 null */
-    private suspend fun fetchEngineDownloadedFile(fileName: String): ByteArray? {
+    /** 通过引擎返回的 FD 流式拷贝已下载文件到 [destFile]，未命中或失败返回 false */
+    private suspend fun copyEngineDownloadedFile(fileName: String, destFile: File): Boolean {
         return try {
             val bundle = SyncClipboardBridge.with(app)
                 .to("com.android.systemui")
                 .key(BridgeKeys.GET_DOWNLOADED_FILE)
                 .payload(android.os.Bundle().apply { putString("fileName", fileName) })
                 .await(timeout = 4000)
-            val bytes = bundle.getByteArray("bytes")
-            if (bytes != null && bytes.isNotEmpty()) bytes else null
+            val pfd = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                bundle.getParcelable("pfd", android.os.ParcelFileDescriptor::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                bundle.getParcelable<android.os.ParcelFileDescriptor>("pfd")
+            } ?: return false
+            try {
+                // AutoCloseInputStream 关闭时同步释放 FD
+                android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
+                    java.io.FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                }
+                true
+            } catch (e: Exception) {
+                destFile.delete() // 清理半截文件，防止缓存误复用
+                false
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Logger.debug("MainViewModel", "fetchEngineDownloadedFile miss: ${e.message}")
-            null
+            Logger.debug("MainViewModel", "copyEngineDownloadedFile miss: ${e.message}")
+            false
         }
     }
 
