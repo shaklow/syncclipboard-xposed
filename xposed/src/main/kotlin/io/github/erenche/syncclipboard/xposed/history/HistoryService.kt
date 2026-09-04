@@ -43,7 +43,7 @@ class HistoryService(context: Context) {
     @Volatile
     private var lastDiskLimitCheck = 0L
 
-    private val historyDir = File(context.filesDir, "history_files").apply { if (!exists()) mkdirs() }
+    private val historyDir = EngineStorage.historyDir(context).apply { if (!exists()) mkdirs() }
 
     private val db = AppDatabase.getInstance(ctx)
     private val dao = db.historyItemDao()

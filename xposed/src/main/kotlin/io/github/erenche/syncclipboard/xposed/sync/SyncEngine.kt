@@ -26,6 +26,7 @@ import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
 import io.github.erenche.syncclipboard.xposed.BuildConfig
+import io.github.erenche.syncclipboard.xposed.history.EngineStorage
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
 import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
@@ -230,9 +231,13 @@ class SyncEngine private constructor() {
         config = Prefs.loadConfig(context)
         // 加载持久化的历史同步游标（增量同步用）
         lastSyncTime = Prefs.loadHistoryLastSyncTime(context)
+        // 引擎数据统一目录 filesDir/SyncClipboard/（历史库/归档/下载暂存）
+        EngineStorage.ensureDirs(context)
         // 加载持久化的远程内容状态（SystemUI 重启后避免重复下载/重复历史）
         lastRemoteHash = Prefs.loadLastRemoteHash(context)
         lastRemoteFilePath = Prefs.loadLastRemoteFilePath(context)
+        // 恢复缓存的最新 profile（重启后 app 无需等网络拉取即可显示上次内容）
+        lastRemoteProfile = Prefs.loadLastRemoteProfile(context)
         Logger.enabled = config.enableLogging
         Logger.logLevel = config.logLevel
         Logger.maxBufferSize = config.logBufferSize
@@ -1288,6 +1293,7 @@ class SyncEngine private constructor() {
                     dataName = fileName,
                     size = if (fileSize > 0) fileSize else null
                 )
+                Prefs.saveLastRemoteProfile(ctx, lastRemoteProfile)
                 notifyContentChanged()
                 Logger.info(TAG, "registerUploadedContent: hash=${hash.take(12)}, name=$fileName")
             } catch (e: Exception) {
@@ -1305,12 +1311,13 @@ class SyncEngine private constructor() {
             try {
                 getHistoryService()?.clearAll()
                 appContext?.let { ctx ->
-                    java.io.File(ctx.filesDir, "downloads").let { if (it.exists()) it.deleteRecursively() }
-                    ctx.cacheDir.listFiles()
-                        ?.filter { it.name.startsWith("upload_") }
-                        ?.forEach { it.delete() }
+                    EngineStorage.downloadsDir(ctx).let { if (it.exists()) it.deleteRecursively() }
+                    EngineStorage.uploadTempDir(ctx).listFiles()?.forEach { it.delete() }
+                    // 目录集中化之前的孤儿数据（不存在则忽略）
+                    EngineStorage.cleanupLegacy(ctx)
                     Prefs.saveLastRemoteHash(ctx, null)
                     Prefs.saveLastRemoteFilePath(ctx, null)
+                    Prefs.saveLastRemoteProfile(ctx, null)
                 }
                 lastSyncTime = 0L
                 appContext?.let { Prefs.resetHistoryLastSyncTime(it) }
@@ -1412,6 +1419,7 @@ class SyncEngine private constructor() {
             } else {
                 // 未开启后台下载：仅更新 profile 缓存，filePath 不变
                 lastRemoteProfile = profile
+                appContext?.let { Prefs.saveLastRemoteProfile(it, profile) }
                 notifyContentChanged()
             }
         } else {
@@ -1447,7 +1455,7 @@ class SyncEngine private constructor() {
     private fun restoreRemoteFilePath(profile: ProfileDto): Boolean {
         val name = profile.dataName ?: return false
         val ctx = appContext ?: return false
-        val path = "${ctx.filesDir}/downloads/$name"
+        val path = java.io.File(EngineStorage.downloadsDir(ctx), name).absolutePath
         val file = java.io.File(path)
         if (file.exists() && file.length() > 0) {
             lastRemoteFilePath = path
@@ -1462,6 +1470,7 @@ class SyncEngine private constructor() {
      *  文件下载/历史记录/自动保存放到后台协程执行，避免大文件下载阻塞 fetch 返回与轮询。 */
     private fun notifyAndApplyAsync(profile: ProfileDto) {
         lastRemoteProfile = profile
+        appContext?.let { Prefs.saveLastRemoteProfile(it, profile) }
         notifyContentChanged()
         scope.launch {
             try {
@@ -1567,6 +1576,7 @@ class SyncEngine private constructor() {
                 dataName = uploadContent.fileName,
                 size = uploadContent.fileSize
             )
+            appContext?.let { Prefs.saveLastRemoteProfile(it, lastRemoteProfile) }
             lastRemoteFilePath = uploadContent.fileUri?.takeIf { it.startsWith("/") }
             Logger.info(TAG, "Content uploaded successfully")
             return true
@@ -1580,7 +1590,7 @@ class SyncEngine private constructor() {
      *  历史归档副本在 history_files/ 由 HistoryService 的磁盘 LRU 管理，下载目录只做"当前文件"暂存。 */
     private fun trimDownloadsDir(context: Context, keepName: String) {
         try {
-            val dir = java.io.File(context.filesDir, "downloads")
+            val dir = EngineStorage.downloadsDir(context)
             if (!dir.isDirectory) return
             dir.listFiles()?.forEach { f ->
                 if (f.isFile && f.name != keepName) f.delete()
@@ -1597,7 +1607,7 @@ class SyncEngine private constructor() {
         return try {
             val uri = android.net.Uri.parse(uriString)
             val name = fileName ?: "temp_${System.currentTimeMillis()}"
-            val tempFile = java.io.File(context.cacheDir, "upload_$name")
+            val tempFile = java.io.File(EngineStorage.uploadTempDir(context), name)
             context.contentResolver.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { output ->
                     input.copyTo(output)
@@ -1634,7 +1644,7 @@ class SyncEngine private constructor() {
                         "(${size}B > limit ${config.autoDownloadMaxSize}B), keeping clipboard text only")
                 } else {
                 val name = profile.dataName!!
-                val destPath = "${context.filesDir}/downloads/$name"
+                val destPath = java.io.File(EngineStorage.downloadsDir(context), name).absolutePath
                 Logger.info(TAG, "downloadAndApplyContent: downloading file $name")
                 client.downloadFile(name, destPath)
                 val destFile = java.io.File(destPath)
@@ -1693,6 +1703,7 @@ class SyncEngine private constructor() {
             appContext?.let { Prefs.saveLastRemoteFilePath(it, downloadedFilePath) }
             // 缓存一致性：profile 与 filePath 同时更新后再通知 UI
             lastRemoteProfile = profile
+            appContext?.let { Prefs.saveLastRemoteProfile(it, profile) }
             notifyContentChanged()
             Logger.debug(TAG, "downloadAndApplyContent: notified app")
 
@@ -2111,19 +2122,18 @@ class SyncEngine private constructor() {
                     // 历史数据库文件（含 WAL/SHM）
                     listOf("clipboard_history.db", "clipboard_history.db-wal", "clipboard_history.db-shm")
                         .forEach { name ->
-                            val f = java.io.File(ctx.filesDir, name)
+                            val f = java.io.File(EngineStorage.rootDir(ctx), name)
                             if (f.isFile) total += f.length()
                         }
                     // 历史文件目录与下载目录
-                    listOf("history_files", "downloads").forEach { name ->
-                        val dir = java.io.File(ctx.filesDir, name)
+                    listOf(EngineStorage.historyDir(ctx), EngineStorage.downloadsDir(ctx)).forEach { dir ->
                         if (dir.isDirectory) {
                             dir.walkTopDown().filter { it.isFile }.forEach { total += it.length() }
                         }
                     }
                     // 上传临时文件
-                    ctx.cacheDir.listFiles()
-                        ?.filter { it.isFile && it.name.startsWith("upload_") }
+                    EngineStorage.uploadTempDir(ctx).listFiles()
+                        ?.filter { it.isFile }
                         ?.forEach { total += it.length() }
                     total
                 } catch (_: Exception) { 0L }
@@ -2142,7 +2152,7 @@ class SyncEngine private constructor() {
                 try {
                     val ctx = appContext
                     if (ctx != null) {
-                        val dir = java.io.File(ctx.filesDir, "downloads")
+                        val dir = EngineStorage.downloadsDir(ctx)
                         val file = java.io.File(dir, fileName)
                         // canonical 路径校验：拒绝 ../ 穿越出下载目录
                         if (file.canonicalPath.startsWith(dir.canonicalPath + java.io.File.separator)

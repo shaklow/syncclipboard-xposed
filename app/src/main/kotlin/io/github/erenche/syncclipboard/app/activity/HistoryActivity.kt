@@ -956,18 +956,27 @@ private fun HistoryItemRow(
         LaunchedEffect(item.id, item.dataName) {
             previewLoading = true
             try {
-                val config = Prefs.loadConfig(context)
-                val server = config.servers.getOrNull(config.activeServerIndex)
-                if (server != null) {
-                    val api = ServerApi(server)
-                    val safeName = item.dataName ?: "img_${item.id}"
-                    val destFile = File(context.cacheDir, "hist_${item.id}_$safeName")
-                    val downloaded = withContext(Dispatchers.IO) {
-                        api.downloadHistoryData(item.type, item.profileHash, destFile)
-                    }
-                    if (downloaded != null) {
-                        HistoryActivity.previewCache[item.id] = downloaded
-                        previewFile = downloaded
+                val safeName = item.dataName ?: "img_${item.id}"
+                val destFile = File(context.cacheDir, "hist_${item.id}_$safeName")
+                // 优先复用磁盘缓存（app 重启后内存缓存失效）
+                val cached = withContext(Dispatchers.IO) {
+                    destFile.takeIf { it.exists() && it.length() > 0 }
+                }
+                if (cached != null) {
+                    HistoryActivity.previewCache[item.id] = cached
+                    previewFile = cached
+                } else {
+                    val config = Prefs.loadConfig(context)
+                    val server = config.servers.getOrNull(config.activeServerIndex)
+                    if (server != null) {
+                        val api = ServerApi(server)
+                        val downloaded = withContext(Dispatchers.IO) {
+                            api.downloadHistoryData(item.type, item.profileHash, destFile)
+                        }
+                        if (downloaded != null) {
+                            HistoryActivity.previewCache[item.id] = downloaded
+                            previewFile = downloaded
+                        }
                     }
                 }
             } catch (_: Exception) {

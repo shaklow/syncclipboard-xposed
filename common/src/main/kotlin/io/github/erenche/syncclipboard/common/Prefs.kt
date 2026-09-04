@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import io.github.erenche.syncclipboard.common.model.AppConfig
 import io.github.erenche.syncclipboard.common.model.DEFAULT_APP_CONFIG
+import io.github.erenche.syncclipboard.common.model.ProfileDto
 import io.github.erenche.syncclipboard.common.model.ServerConfig
 import io.github.erenche.syncclipboard.common.util.Logger
 import kotlinx.serialization.json.Json
@@ -21,6 +22,7 @@ object Prefs {
     private const val KEY_HISTORY_LAST_SYNC_TIME = "history_last_sync_time"
     private const val KEY_LAST_REMOTE_HASH = "last_remote_hash"
     private const val KEY_LAST_REMOTE_FILE_PATH = "last_remote_file_path"
+    private const val KEY_LAST_REMOTE_PROFILE = "last_remote_profile"
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -150,5 +152,31 @@ object Prefs {
      */
     fun saveLastRemoteFilePath(context: Context, path: String?) {
         getPrefs(context).edit().putString(KEY_LAST_REMOTE_FILE_PATH, path).apply()
+    }
+
+    /**
+     * 加载缓存的最新 profile（引擎重启后恢复，app 无需等网络拉取即可显示上次内容）
+     */
+    fun loadLastRemoteProfile(context: Context): ProfileDto? {
+        val profileJson = getPrefs(context).getString(KEY_LAST_REMOTE_PROFILE, null) ?: return null
+        return try {
+            json.decodeFromString(ProfileDto.serializer(), profileJson)
+        } catch (e: Exception) {
+            Logger.warn("Prefs", "Failed to parse last remote profile", e)
+            null
+        }
+    }
+
+    /**
+     * 保存缓存的最新 profile（null 清除）
+     */
+    fun saveLastRemoteProfile(context: Context, profile: ProfileDto?) {
+        val editor = getPrefs(context).edit()
+        if (profile == null) {
+            editor.remove(KEY_LAST_REMOTE_PROFILE)
+        } else {
+            editor.putString(KEY_LAST_REMOTE_PROFILE, json.encodeToString(ProfileDto.serializer(), profile))
+        }
+        editor.apply()
     }
 }
