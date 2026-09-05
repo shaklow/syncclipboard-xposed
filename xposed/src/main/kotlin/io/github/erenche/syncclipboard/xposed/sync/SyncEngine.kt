@@ -1311,6 +1311,11 @@ class SyncEngine private constructor() {
             try {
                 getHistoryService()?.clearAll()
                 appContext?.let { ctx ->
+                    // 历史归档文件目录（history_files）应一并清空：clearAll 仅按 DB 活跃记录的 fileUri
+                    // 逐个删除，可能会因父目录路径比对失败或软删除残留而漏删，这里整体清空目录内容。
+                    EngineStorage.historyDir(ctx).let { dir ->
+                        if (dir.exists()) dir.listFiles()?.forEach { it.deleteRecursively() }
+                    }
                     EngineStorage.downloadsDir(ctx).let { if (it.exists()) it.deleteRecursively() }
                     EngineStorage.uploadTempDir(ctx).listFiles()?.forEach { it.delete() }
                     // 目录集中化之前的孤儿数据（不存在则忽略）
