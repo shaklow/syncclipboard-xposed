@@ -141,6 +141,7 @@ class HistoryActivity : BaseActivity() {
 fun HistoryScreen(
     bottomPadding: Dp = 0.dp,
     embedded: Boolean = false,
+    active: Boolean = true,
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -712,6 +713,7 @@ fun HistoryScreen(
                             onImageClick = { file, bitmap ->
                                 expandedImage = ExpandedHistoryImage(file = file, thumbnail = bitmap)
                             },
+                            active = active,
                             // 禁用 item 级 fadeIn（滚动回收会重放导致闪变），只保留弹簧位移；
                             // 渐显由 pageFade 一次性驱动，完成值恒定不闪
                             modifier = Modifier
@@ -810,6 +812,7 @@ private fun SwipeableHistoryCard(
     onDelete: () -> Unit,
     onToggleStar: () -> Unit,
     onImageClick: (File, Bitmap) -> Unit,
+    active: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val cardShape = RoundedCornerShape(16.dp)
@@ -965,6 +968,7 @@ private fun SwipeableHistoryCard(
                         expanded = expanded,
                         imageClickable = !selectionMode,
                         onImageClick = onImageClick,
+                        active = active,
                     )
                 }
             }
@@ -981,6 +985,7 @@ private fun HistoryItemRow(
     expanded: Boolean = false,
     imageClickable: Boolean = true,
     onImageClick: (File, Bitmap) -> Unit = { _, _ -> },
+    active: Boolean = true,
 ) {
     val dateFormat = remember { SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()) }
     val scope = rememberCoroutineScope()
@@ -991,7 +996,9 @@ private fun HistoryItemRow(
     }
     var previewLoading by remember(item.id) { mutableStateOf(false) }
 
-    if (item.type == ClipboardContentType.Image && item.hasData && previewFile == null) {
+    // 仅当历史页真正可见（active）时才启动图片下载/解码；页面在屏幕外预组合时不加载，
+    // 配合 LazyColumn 只组合可视条目，做到“图片在历史列表中首次看到时加载”。
+    if (active && item.type == ClipboardContentType.Image && item.hasData && previewFile == null) {
         LaunchedEffect(item.id, item.dataName) {
             previewLoading = true
             try {
