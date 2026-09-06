@@ -25,6 +25,8 @@ import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
+import io.github.erenche.syncclipboard.xposed.BuildConfig
+import io.github.erenche.syncclipboard.xposed.history.EngineStorage
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
 import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
@@ -54,7 +56,7 @@ import kotlinx.serialization.json.Json
  * 负责监听剪贴板变化（来自 ClipboardServiceHooker）、上传/下载、历史记录、IPC 路由。
  *
  * 去重策略：
- * - onLocalClipboardChanged 的哈希检查在调用线程同步执行，防止竞态
+ * - onLocalClipboardChanged 的哈希 check-and-set 由 localDedupLock 保护，防止竞态
  * - system_server 中不注册 OnPrimaryClipChangedListener / 不轮询本地剪贴板
  *   仅依赖 ClipboardServiceHooker 提供的事件
  */
@@ -106,9 +108,12 @@ class SyncEngine private constructor() {
 
     private var processName: String = "unknown"
 
-    /** 本地哈希去重 — 同步检查防止竞态 */
+    /** 本地哈希去重 — 锁保护的原子 check-and-set */
     @Volatile
     private var lastLocalHash: String? = null
+
+    /** 去重锁：listener 后台化后多线程并发触发，保证 check-and-set 原子性 */
+    private val localDedupLock = Any()
     @Volatile
     private var lastRemoteHash: String? = null
 
@@ -204,12 +209,35 @@ class SyncEngine private constructor() {
         processName = getProcessName(context)
         Logger.info(TAG, "initialize() process=$processName")
 
+        // Debug 构建开启严格模式：主线程磁盘/网络违规与资源泄露（含 PFD）告警到 logcat
+        if (BuildConfig.DEBUG) {
+            android.os.StrictMode.setThreadPolicy(
+                android.os.StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .detectNetwork()
+                    .penaltyLog()
+                    .build()
+            )
+            android.os.StrictMode.setVmPolicy(
+                android.os.StrictMode.VmPolicy.Builder()
+                    .detectLeakedClosableObjects()
+                    .detectLeakedSqlLiteObjects()
+                    .penaltyLog()
+                    .build()
+            )
+        }
+
         config = Prefs.loadConfig(context)
         // 加载持久化的历史同步游标（增量同步用）
         lastSyncTime = Prefs.loadHistoryLastSyncTime(context)
+        // 引擎数据统一目录 filesDir/SyncClipboard/（历史库/归档/下载暂存）
+        EngineStorage.ensureDirs(context)
         // 加载持久化的远程内容状态（SystemUI 重启后避免重复下载/重复历史）
         lastRemoteHash = Prefs.loadLastRemoteHash(context)
         lastRemoteFilePath = Prefs.loadLastRemoteFilePath(context)
+        // 恢复缓存的最新 profile（重启后 app 无需等网络拉取即可显示上次内容）
+        lastRemoteProfile = Prefs.loadLastRemoteProfile(context)
         Logger.enabled = config.enableLogging
         Logger.logLevel = config.logLevel
         Logger.maxBufferSize = config.logBufferSize
@@ -600,9 +628,12 @@ class SyncEngine private constructor() {
         val ctx = appContext ?: return@OnPrimaryClipChangedListener
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
             as? android.content.ClipboardManager ?: return@OnPrimaryClipChangedListener
+        // 主线程仅取 ClipData 快照；provider 查询（跨进程 Binder）转后台执行
         val clip = cm.primaryClip ?: return@OnPrimaryClipChangedListener
-        val content = extractFromClip(ctx, clip) ?: return@OnPrimaryClipChangedListener
-        onLocalClipboardChanged(content)
+        scope.launch {
+            val content = extractFromClip(ctx, clip) ?: return@launch
+            onLocalClipboardChanged(content)
+        }
     }
 
     fun stop() {
@@ -749,9 +780,9 @@ class SyncEngine private constructor() {
     }
 
     /**
-     * 当检测到本地剪贴板变化时由 ClipboardServiceHooker / ClipboardHooker / Listener 调用。
+     * 当检测到本地剪贴板变化时由 clipChangedListener 调用（后台线程）。
      *
-     * 哈希去重在调用线程同步执行，防止多个调用者竞态导致重复上传。
+     * 哈希去重以 [localDedupLock] 保护 check-and-set，多线程触发不会重复上传。
      *
      * @param force 是否强制处理（跳过去重），用于手动上传
      */
@@ -764,8 +795,10 @@ class SyncEngine private constructor() {
             ?: if (content.hasData && content.fileUri != null) HashUtils.sha256(content.fileUri!!)
             else HashUtils.sha256(content.text)
 
-        if (!force && hash.equals(lastLocalHash, ignoreCase = true)) return
-        lastLocalHash = hash
+        synchronized(localDedupLock) {
+            if (!force && hash.equals(lastLocalHash, ignoreCase = true)) return
+            lastLocalHash = hash
+        }
 
         scope.launch {
             try {
@@ -1260,6 +1293,7 @@ class SyncEngine private constructor() {
                     dataName = fileName,
                     size = if (fileSize > 0) fileSize else null
                 )
+                Prefs.saveLastRemoteProfile(ctx, lastRemoteProfile)
                 notifyContentChanged()
                 Logger.info(TAG, "registerUploadedContent: hash=${hash.take(12)}, name=$fileName")
             } catch (e: Exception) {
@@ -1277,12 +1311,18 @@ class SyncEngine private constructor() {
             try {
                 getHistoryService()?.clearAll()
                 appContext?.let { ctx ->
-                    java.io.File(ctx.filesDir, "downloads").let { if (it.exists()) it.deleteRecursively() }
-                    ctx.cacheDir.listFiles()
-                        ?.filter { it.name.startsWith("upload_") }
-                        ?.forEach { it.delete() }
+                    // 历史归档文件目录（history_files）应一并清空：clearAll 仅按 DB 活跃记录的 fileUri
+                    // 逐个删除，可能会因父目录路径比对失败或软删除残留而漏删，这里整体清空目录内容。
+                    EngineStorage.historyDir(ctx).let { dir ->
+                        if (dir.exists()) dir.listFiles()?.forEach { it.deleteRecursively() }
+                    }
+                    EngineStorage.downloadsDir(ctx).let { if (it.exists()) it.deleteRecursively() }
+                    EngineStorage.uploadTempDir(ctx).listFiles()?.forEach { it.delete() }
+                    // 目录集中化之前的孤儿数据（不存在则忽略）
+                    EngineStorage.cleanupLegacy(ctx)
                     Prefs.saveLastRemoteHash(ctx, null)
                     Prefs.saveLastRemoteFilePath(ctx, null)
+                    Prefs.saveLastRemoteProfile(ctx, null)
                 }
                 lastSyncTime = 0L
                 appContext?.let { Prefs.resetHistoryLastSyncTime(it) }
@@ -1384,6 +1424,7 @@ class SyncEngine private constructor() {
             } else {
                 // 未开启后台下载：仅更新 profile 缓存，filePath 不变
                 lastRemoteProfile = profile
+                appContext?.let { Prefs.saveLastRemoteProfile(it, profile) }
                 notifyContentChanged()
             }
         } else {
@@ -1419,7 +1460,7 @@ class SyncEngine private constructor() {
     private fun restoreRemoteFilePath(profile: ProfileDto): Boolean {
         val name = profile.dataName ?: return false
         val ctx = appContext ?: return false
-        val path = "${ctx.filesDir}/downloads/$name"
+        val path = java.io.File(EngineStorage.downloadsDir(ctx), name).absolutePath
         val file = java.io.File(path)
         if (file.exists() && file.length() > 0) {
             lastRemoteFilePath = path
@@ -1434,6 +1475,7 @@ class SyncEngine private constructor() {
      *  文件下载/历史记录/自动保存放到后台协程执行，避免大文件下载阻塞 fetch 返回与轮询。 */
     private fun notifyAndApplyAsync(profile: ProfileDto) {
         lastRemoteProfile = profile
+        appContext?.let { Prefs.saveLastRemoteProfile(it, profile) }
         notifyContentChanged()
         scope.launch {
             try {
@@ -1539,6 +1581,7 @@ class SyncEngine private constructor() {
                 dataName = uploadContent.fileName,
                 size = uploadContent.fileSize
             )
+            appContext?.let { Prefs.saveLastRemoteProfile(it, lastRemoteProfile) }
             lastRemoteFilePath = uploadContent.fileUri?.takeIf { it.startsWith("/") }
             Logger.info(TAG, "Content uploaded successfully")
             return true
@@ -1552,7 +1595,7 @@ class SyncEngine private constructor() {
      *  历史归档副本在 history_files/ 由 HistoryService 的磁盘 LRU 管理，下载目录只做"当前文件"暂存。 */
     private fun trimDownloadsDir(context: Context, keepName: String) {
         try {
-            val dir = java.io.File(context.filesDir, "downloads")
+            val dir = EngineStorage.downloadsDir(context)
             if (!dir.isDirectory) return
             dir.listFiles()?.forEach { f ->
                 if (f.isFile && f.name != keepName) f.delete()
@@ -1569,7 +1612,7 @@ class SyncEngine private constructor() {
         return try {
             val uri = android.net.Uri.parse(uriString)
             val name = fileName ?: "temp_${System.currentTimeMillis()}"
-            val tempFile = java.io.File(context.cacheDir, "upload_$name")
+            val tempFile = java.io.File(EngineStorage.uploadTempDir(context), name)
             context.contentResolver.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { output ->
                     input.copyTo(output)
@@ -1606,7 +1649,7 @@ class SyncEngine private constructor() {
                         "(${size}B > limit ${config.autoDownloadMaxSize}B), keeping clipboard text only")
                 } else {
                 val name = profile.dataName!!
-                val destPath = "${context.filesDir}/downloads/$name"
+                val destPath = java.io.File(EngineStorage.downloadsDir(context), name).absolutePath
                 Logger.info(TAG, "downloadAndApplyContent: downloading file $name")
                 client.downloadFile(name, destPath)
                 val destFile = java.io.File(destPath)
@@ -1665,6 +1708,7 @@ class SyncEngine private constructor() {
             appContext?.let { Prefs.saveLastRemoteFilePath(it, downloadedFilePath) }
             // 缓存一致性：profile 与 filePath 同时更新后再通知 UI
             lastRemoteProfile = profile
+            appContext?.let { Prefs.saveLastRemoteProfile(it, profile) }
             notifyContentChanged()
             Logger.debug(TAG, "downloadAndApplyContent: notified app")
 
@@ -2083,19 +2127,18 @@ class SyncEngine private constructor() {
                     // 历史数据库文件（含 WAL/SHM）
                     listOf("clipboard_history.db", "clipboard_history.db-wal", "clipboard_history.db-shm")
                         .forEach { name ->
-                            val f = java.io.File(ctx.filesDir, name)
+                            val f = java.io.File(EngineStorage.rootDir(ctx), name)
                             if (f.isFile) total += f.length()
                         }
                     // 历史文件目录与下载目录
-                    listOf("history_files", "downloads").forEach { name ->
-                        val dir = java.io.File(ctx.filesDir, name)
+                    listOf(EngineStorage.historyDir(ctx), EngineStorage.downloadsDir(ctx)).forEach { dir ->
                         if (dir.isDirectory) {
                             dir.walkTopDown().filter { it.isFile }.forEach { total += it.length() }
                         }
                     }
                     // 上传临时文件
-                    ctx.cacheDir.listFiles()
-                        ?.filter { it.isFile && it.name.startsWith("upload_") }
+                    EngineStorage.uploadTempDir(ctx).listFiles()
+                        ?.filter { it.isFile }
                         ?.forEach { total += it.length() }
                     total
                 } catch (_: Exception) { 0L }
@@ -2103,20 +2146,28 @@ class SyncEngine private constructor() {
             }
 
             onQuery(BridgeKeys.GET_DOWNLOADED_FILE) {
-                // 查询引擎下载目录中已存在的文件，命中则直接返回字节（≤2MB），
-                // app 端预览免走一次网络下载。Binder 事务限制约 1MB，留余量。
+                // 返回引擎下载目录中已存在文件的 FD（跨进程零拷贝，任意大小），
+                // app 端预览免走一次网络下载。FD 由 bridge 在传输后统一关闭防泄露。
                 val fileName = data.getString("fileName")
                 if (fileName.isNullOrBlank()) {
                     reply(Bundle.EMPTY)
                     return@onQuery
                 }
+                var pfd: android.os.ParcelFileDescriptor? = null
                 try {
                     val ctx = appContext
                     if (ctx != null) {
-                        val file = java.io.File(java.io.File(ctx.filesDir, "downloads"), fileName)
-                        if (file.isFile && file.length() in 1..2_000_000L) {
+                        val dir = EngineStorage.downloadsDir(ctx)
+                        val file = java.io.File(dir, fileName)
+                        // canonical 路径校验：拒绝 ../ 穿越出下载目录
+                        if (file.canonicalPath.startsWith(dir.canonicalPath + java.io.File.separator)
+                            && file.isFile && file.length() > 0
+                        ) {
+                            pfd = android.os.ParcelFileDescriptor.open(
+                                file, android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                            )
                             reply(Bundle().apply {
-                                putByteArray("bytes", file.readBytes())
+                                putParcelable("pfd", pfd)
                                 putLong("size", file.length())
                             })
                             return@onQuery
@@ -2124,6 +2175,8 @@ class SyncEngine private constructor() {
                     }
                     reply(Bundle.EMPTY)
                 } catch (e: Exception) {
+                    // open 成功但 reply 前异常：立即关闭，避免 SystemUI 侧泄露
+                    runCatching { pfd?.close() }
                     Logger.warn(TAG, "GET_DOWNLOADED_FILE failed: ${e.message}")
                     reply(Bundle.EMPTY)
                 }
@@ -2143,10 +2196,11 @@ class SyncEngine private constructor() {
                 val offset = data.getInt("offset", 0)
                 val limit = data.getInt("limit", 50)
                 val searchText = data.getString("searchText")
+                val typeFilter = data.getString("typeFilter")?.takeIf { it.isNotBlank() }
                 val hs = getHistoryService()
                 if (hs != null) {
-                    val pageItems = hs.getPaged(offset, limit, searchText)
-                    val totalCount = hs.count(searchText)
+                    val pageItems = hs.getPaged(offset, limit, searchText, typeFilter)
+                    val totalCount = hs.count(searchText, typeFilter)
                     val itemsJson = Json.encodeToString(
                         ListSerializer(HistoryItem.serializer()), pageItems
                     )

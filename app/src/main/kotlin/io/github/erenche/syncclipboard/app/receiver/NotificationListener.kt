@@ -57,16 +57,14 @@ class NotificationListener : NotificationListenerService() {
 
         val code = VerificationCodeExtractor.extract(body) ?: return
 
-        // 接收端去重：5 分钟内相同验证码不重复转发（与 SmsReceiver 共享去重窗口）
-        val now = System.currentTimeMillis()
-        if (code == lastUploadedCode && (now - lastUploadTimeMs) < DEDUP_WINDOW_MS) {
-            Logger.info(TAG, "Notification code dedup: skipping duplicate within ${DEDUP_WINDOW_MS / 1000}s")
+        // 与 SMS_RECEIVED 共享去重状态，避免短信广播和短信应用通知各上传一次。
+        if (!VerificationCodeExtractor.shouldForward(code)) {
+            Logger.info(TAG, "Notification code dedup: skipping duplicate within 300s")
             return
         }
-        lastUploadedCode = code
-        lastUploadTimeMs = now
 
-        Logger.info(TAG, "Notification verification code detected from ${sbn.packageName}: ${code.take(6)}")
+        // 不把验证码正文写入日志，只记录来源和长度。
+        Logger.info(TAG, "Notification verification code detected from ${sbn.packageName} (length=${code.length})")
 
         // 通过桥接发送给 SystemUI 的 SyncEngine，由其负责复制到剪贴板并上传
         try {
@@ -82,11 +80,5 @@ class NotificationListener : NotificationListenerService() {
 
     companion object {
         private const val TAG = "NotificationListener"
-
-        /** 接收端去重窗口：5 分钟内相同验证码只转发一次（与 SmsReceiver 共享） */
-        private const val DEDUP_WINDOW_MS = 5 * 60 * 1000L
-
-        @Volatile private var lastUploadedCode: String? = null
-        @Volatile private var lastUploadTimeMs: Long = 0L
     }
 }

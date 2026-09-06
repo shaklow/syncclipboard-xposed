@@ -25,9 +25,10 @@ interface HistoryItemDao {
     // ─── 分页查询 ────────────────────────────────────────────────
 
     /**
-     * 分页查询（支持搜索）。
+     * 分页查询（支持搜索 + 类型筛选）。
      *
-     * @param searchText 为 null 或空字符串时返回全部活跃记录
+     * @param searchText 为 null 或空字符串时不过滤
+     * @param typeFilter null = 全部；'starred' = 仅收藏；'Text'/'Image'/'File' = 按类型
      */
     @Query(
         """
@@ -36,6 +37,7 @@ interface HistoryItemDao {
           AND (:searchText IS NULL OR :searchText = ''
                OR text LIKE '%' || :searchText || '%'
                OR dataName LIKE '%' || :searchText || '%')
+          AND (:typeFilter IS NULL OR (:typeFilter = 'starred' AND starred = 1) OR type = :typeFilter)
         ORDER BY pinned DESC, timestamp DESC
         LIMIT :limit OFFSET :offset
         """
@@ -43,10 +45,11 @@ interface HistoryItemDao {
     fun getPaged(
         offset: Int,
         limit: Int,
-        searchText: String?
+        searchText: String?,
+        typeFilter: String? = null
     ): List<HistoryItemEntity>
 
-    /** 匹配搜索条件的活跃记录总数（用于 UI 计算总页数） */
+    /** 匹配搜索/筛选条件的活跃记录总数（用于 UI 计算总页数） */
     @Query(
         """
         SELECT COUNT(*) FROM history_items
@@ -54,9 +57,10 @@ interface HistoryItemDao {
           AND (:searchText IS NULL OR :searchText = ''
                OR text LIKE '%' || :searchText || '%'
                OR dataName LIKE '%' || :searchText || '%')
+          AND (:typeFilter IS NULL OR (:typeFilter = 'starred' AND starred = 1) OR type = :typeFilter)
         """
     )
-    fun count(searchText: String?): Int
+    fun count(searchText: String?, typeFilter: String? = null): Int
 
     // ─── 全量 / 单条查询 ─────────────────────────────────────────
 

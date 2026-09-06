@@ -43,7 +43,7 @@ class HistoryService(context: Context) {
     @Volatile
     private var lastDiskLimitCheck = 0L
 
-    private val historyDir = File(context.filesDir, "history_files").apply { if (!exists()) mkdirs() }
+    private val historyDir = EngineStorage.historyDir(context).apply { if (!exists()) mkdirs() }
 
     private val db = AppDatabase.getInstance(ctx)
     private val dao = db.historyItemDao()
@@ -59,16 +59,18 @@ class HistoryService(context: Context) {
     }
 
     /**
-     * 分页查询（支持搜索文本过滤），置顶优先，按时间倒序，排除软删除。
+     * 分页查询（支持搜索文本 + 类型筛选），置顶优先，按时间倒序，排除软删除。
      * 用于 UI 分页加载。
+     *
+     * @param typeFilter null = 全部；'starred' = 仅收藏；'Text'/'Image'/'File' = 按类型
      */
-    fun getPaged(offset: Int, limit: Int, searchText: String?): List<HistoryItem> {
-        return dao.getPaged(offset, limit, searchText?.trim()).map { it.toModel() }
+    fun getPaged(offset: Int, limit: Int, searchText: String?, typeFilter: String? = null): List<HistoryItem> {
+        return dao.getPaged(offset, limit, searchText?.trim(), typeFilter).map { it.toModel() }
     }
 
-    /** 符合搜索条件的活跃记录总数（用于 UI 计算总页数） */
-    fun count(searchText: String?): Int {
-        return dao.count(searchText?.trim())
+    /** 符合搜索/筛选条件的活跃记录总数（用于 UI 计算总页数） */
+    fun count(searchText: String?, typeFilter: String? = null): Int {
+        return dao.count(searchText?.trim(), typeFilter)
     }
 
     /** 获取全部记录（置顶优先，按时间倒序），排除软删除 */

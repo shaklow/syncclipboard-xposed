@@ -251,9 +251,13 @@
     <string name="history_unstar">Unstar</string>
     <string name="history_pin">Pin</string>
     <string name="history_search">Search history…</string>
+    <string name="history_filter">Filter</string>
+    <string name="history_filter_all">All</string>
     <string name="history_copied">Copied to clipboard</string>
     <string name="history_cleared">History cleared</string>
     <string name="history_no_results">No matching results</string>
+    <string name="history_image_preview">Image preview</string>
+    <string name="history_image_fullscreen">Full-size image</string>
     <string name="history_page_prev">Prev</string>
     <string name="history_page_next">Next</string>
     <string name="history_page_indicator">Page %1$d / %2$d</string>

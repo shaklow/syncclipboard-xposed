@@ -311,7 +311,11 @@ fun MainScreen(viewModel: MainViewModel) {
                 ) { page ->
                     when (page) {
                         0 -> HomeTab(viewModel, bottomPad)
-                        1 -> HistoryScreen(bottomPadding = bottomPad, embedded = true)
+                        1 -> HistoryScreen(
+            bottomPadding = bottomPad,
+            embedded = true,
+            active = mainState.selectedPage == 1,
+        )
                         2 -> ServerConfigScreen(bottomPadding = bottomPad, canBack = false)
                         3 -> SettingsScreen(bottomPadding = bottomPad, canBack = false)
                     }

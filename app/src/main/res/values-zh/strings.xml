@@ -251,9 +251,13 @@
     <string name="history_unstar">取消收藏</string>
     <string name="history_pin">置顶</string>
     <string name="history_search">搜索历史…</string>
+    <string name="history_filter">筛选</string>
+    <string name="history_filter_all">全部</string>
     <string name="history_copied">已复制到剪贴板</string>
     <string name="history_cleared">历史已清空</string>
     <string name="history_no_results">无匹配结果</string>
+    <string name="history_image_preview">图片预览，点击查看大图</string>
+    <string name="history_image_fullscreen">完整图片</string>
     <string name="history_page_prev">上一页</string>
     <string name="history_page_next">下一页</string>
     <string name="history_page_indicator">第 %1$d / %2$d 页</string>

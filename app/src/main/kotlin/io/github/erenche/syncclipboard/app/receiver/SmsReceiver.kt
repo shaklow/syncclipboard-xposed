@@ -45,16 +45,14 @@ class SmsReceiver : BroadcastReceiver() {
 
         val code = VerificationCodeExtractor.extract(body) ?: return
 
-        // 接收端去重：5 分钟内相同验证码不重复转发
-        val now = System.currentTimeMillis()
-        if (code == lastUploadedCode && (now - lastUploadTimeMs) < DEDUP_WINDOW_MS) {
-            Logger.info(TAG, "SMS code dedup: skipping duplicate within ${DEDUP_WINDOW_MS / 1000}s")
+        // SMS_RECEIVED 与通知监听共享去重状态，避免同一条短信上传两次。
+        if (!VerificationCodeExtractor.shouldForward(code)) {
+            Logger.info(TAG, "SMS code dedup: skipping duplicate within 300s")
             return
         }
-        lastUploadedCode = code
-        lastUploadTimeMs = now
 
-        Logger.info(TAG, "SMS verification code detected: ${code.take(6)}")
+        // 不把验证码正文写入日志，只记录长度，避免敏感信息泄漏。
+        Logger.info(TAG, "SMS verification code detected (length=${code.length})")
 
         // 通过桥接发送给 SystemUI 的 SyncEngine，由其负责复制到剪贴板并上传
         try {
@@ -70,11 +68,5 @@ class SmsReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SmsReceiver"
-
-        /** 接收端去重窗口：5 分钟内相同验证码只转发一次 */
-        private const val DEDUP_WINDOW_MS = 5 * 60 * 1000L
-
-        @Volatile private var lastUploadedCode: String? = null
-        @Volatile private var lastUploadTimeMs: Long = 0L
     }
 }

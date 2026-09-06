@@ -33,7 +33,8 @@ val ensureDebugKeystore by tasks.registering {
     }
 }
 
-tasks.matching { it.name.startsWith("package") && it.name.contains("Release") }
+// Debug/Release 签名均使用同一 keystore，全部 package 任务需显式依赖
+tasks.matching { it.name.startsWith("package") }
     .configureEach { dependsOn(ensureDebugKeystore) }
 
 configure<ApplicationExtension> {

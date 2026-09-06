@@ -5,11 +5,12 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import io.github.erenche.syncclipboard.xposed.history.EngineStorage
 
 /**
  * Room 数据库 — 剪贴板历史持久化。
  *
- * 数据库文件位于 SystemUI 私有目录（context.filesDir/clipboard_history.db），
+ * 数据库文件位于 SystemUI 私有目录（filesDir/SyncClipboard/clipboard_history.db），
  * app 进程不直接访问，仍通过 Bridge IPC 查询。
  */
 @Database(
@@ -31,7 +32,10 @@ abstract class AppDatabase : RoomDatabase() {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "clipboard_history.db"
+                    // 绝对路径：落盘于 filesDir/SyncClipboard/（路径以 / 开头时 Room 不再用 databases/）
+                    EngineStorage.databaseFile(context.applicationContext)
+                        .apply { parentFile?.mkdirs() }
+                        .absolutePath
                 ).build().also { instance = it }
             }
         }

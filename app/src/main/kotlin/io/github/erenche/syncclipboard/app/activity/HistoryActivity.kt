@@ -7,8 +7,20 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.os.Bundle
+import android.util.LruCache
 import android.widget.Toast
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -46,6 +58,7 @@ import androidx.core.content.ContextCompat
 import android.graphics.BitmapFactory
 import io.github.erenche.syncclipboard.app.R
 import io.github.erenche.syncclipboard.app.compose.AppToolBarListContainer
+import io.github.erenche.syncclipboard.app.compose.NavigationBackIcon
 import io.github.erenche.syncclipboard.app.net.ServerApi
 import io.github.erenche.syncclipboard.app.transfer.HistoryTransferQueue
 import io.github.erenche.syncclipboard.app.transfer.TransferState
@@ -88,6 +101,7 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Filter
 import top.yukonga.miuix.kmp.icon.extended.More
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
@@ -107,6 +121,15 @@ class HistoryActivity : BaseActivity() {
     companion object {
         /** 图片预览缓存：itemId -> 已下载的本地文件 */
         val previewCache = mutableMapOf<String, File>()
+
+        /**
+         * 已解码的缩略图缓存，避免 LazyColumn 每次回收/复用条目时重新解码图片。
+         * 缩略图尺寸固定且只用于列表展示，使用按内存大小限制的 LruCache。
+         */
+        val previewBitmapCache = object : LruCache<String, Bitmap>(24 * 1024) {
+            override fun sizeOf(key: String, value: Bitmap): Int =
+                value.allocationByteCount / 1024
+        }
     }
 }
 /**
@@ -118,6 +141,7 @@ class HistoryActivity : BaseActivity() {
 fun HistoryScreen(
     bottomPadding: Dp = 0.dp,
     embedded: Boolean = false,
+    active: Boolean = true,
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -128,6 +152,10 @@ fun HistoryScreen(
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    // 类型筛选：null = 全部；'starred' = 收藏；'Text'/'Image'/'File' = 按类型
+    var typeFilter by remember { mutableStateOf<String?>(null) }
+    // 筛选菜单弹出状态（跟随筛选图标）
+    var showFilterPopup by remember { mutableStateOf(false) }
     var pageSize by remember { mutableStateOf(50) }
     var currentPage by remember { mutableStateOf(1) }
     // 列表滚动状态：翻页后内容切换即回顶（无可视滚动跳变）
@@ -142,6 +170,8 @@ fun HistoryScreen(
     // 多选模式：选中的记录 id 集合，非空即进入多选模式
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectionMode = selectedIds.isNotEmpty()
+    // 当前正在查看的大图；使用 Dialog 避免改变历史列表布局，关闭后可无感返回原位置。
+    var expandedImage by remember { mutableStateOf<ExpandedHistoryImage?>(null) }
 
     // 传输队列进行中任务数（角标）
     val transferTasks by HistoryTransferQueue.tasks.collectAsState()
@@ -156,8 +186,9 @@ fun HistoryScreen(
         if (totalCount == 0) 1 else (totalCount + pageSize - 1) / pageSize
     }
 
-    // 多选模式下按返回键先退出多选，而非结束页面
-    BackHandler(enabled = selectionMode) { selectedIds = emptySet() }
+    // 大图模式下优先关闭大图；多选模式下按返回键先退出多选，而非结束页面。
+    BackHandler(enabled = expandedImage != null) { expandedImage = null }
+    BackHandler(enabled = expandedImage == null && selectionMode) { selectedIds = emptySet() }
 
     fun toggleSelect(id: String) {
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
@@ -172,6 +203,7 @@ fun HistoryScreen(
                 putInt("offset", offset)
                 putInt("limit", pageSize)
                 if (searchQuery.isNotBlank()) putString("searchText", searchQuery)
+                putString("typeFilter", typeFilter)
             }
             val bundle = SyncClipboardBridge.with(context)
                 .to("com.android.systemui")
@@ -397,10 +429,84 @@ fun HistoryScreen(
             stringResource(R.string.activity_history),
         canBack = !embedded,
         onBack = { if (selectionMode) selectedIds = emptySet() else if (!embedded) activity?.finish() },
+        // 左上角：返回键（独立页时）+ 筛选图标（标题左边）
+        navigationIcon = {
+            if (!embedded) NavigationBackIcon {
+                if (selectionMode) selectedIds = emptySet() else activity?.finish()
+            }
+            // 筛选选项：值 → 标签（null = 全部）
+            val filterOptions = listOf(
+                null to stringResource(R.string.history_filter_all),
+                "Text" to stringResource(R.string.type_text),
+                "Image" to stringResource(R.string.type_image),
+                "File" to stringResource(R.string.type_file),
+                "starred" to stringResource(R.string.history_star),
+            )
+            Box {
+                WindowListPopup(
+                    show = showFilterPopup,
+                    popupPositionProvider = ListPopupDefaults.ContextMenuPositionProvider,
+                    alignment = PopupPositionProvider.Align.TopStart,
+                    onDismissRequest = { showFilterPopup = false },
+                    content = {
+                        ListPopupColumn {
+                            filterOptions.forEachIndexed { index, (_, label) ->
+                                DropdownImpl(
+                                    text = label,
+                                    optionSize = filterOptions.size,
+                                    isSelected = typeFilter == filterOptions[index].first,
+                                    index = index,
+                                    onSelectedIndexChange = { selectedIdx ->
+                                        showFilterPopup = false
+                                        val newFilter = filterOptions[selectedIdx].first
+                                        if (newFilter != typeFilter) {
+                                            typeFilter = newFilter
+                                            // 筛选切换即时生效：回到第 1 页
+                                            if (currentPage != 1) currentPage = 1
+                                            else scope.launch { loadHistoryPage(1) }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+                IconButton(
+                    onClick = { showFilterPopup = true },
+                    holdDownState = showFilterPopup,
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Filter,
+                        contentDescription = stringResource(R.string.history_filter),
+                        tint = if (typeFilter != null) MiuixTheme.colorScheme.primary
+                        else MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+        },
         isRefreshing = refreshing,
         onRefresh = { refreshFromServer() },
         bottomPadding = bottomPadding,
         listState = listState,
+        // 固定搜索条：搜索框占满整行，随顶栏常驻不随列表滚动
+        stickyContent = {
+            val tfValue = remember(searchQuery) {
+                TextFieldValue(
+                    text = searchQuery,
+                    selection = TextRange(searchQuery.length)
+                )
+            }
+            TextField(
+                label = stringResource(R.string.history_search),
+                value = tfValue,
+                onValueChange = { searchQuery = it.text },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                singleLine = true,
+            )
+        },
         actions = {
             if (!loading && items.isNotEmpty()) {
                 if (selectionMode) {
@@ -523,24 +629,6 @@ fun HistoryScreen(
             }
 
             else -> {
-                item("search_bar") {
-                    val tfValue = remember(searchQuery) {
-                        TextFieldValue(
-                            text = searchQuery,
-                            selection = TextRange(searchQuery.length)
-                        )
-                    }
-                    TextField(
-                        label = stringResource(R.string.history_search),
-                        value = tfValue,
-                        onValueChange = { searchQuery = it.text },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        singleLine = true,
-                    )
-                }
-
                 item("stats_row") {
                     Row(
                         modifier = Modifier
@@ -622,6 +710,10 @@ fun HistoryScreen(
                             onToggleSelect = { toggleSelect(historyItem.id) },
                             onDelete = { deleteItem(historyItem.id) },
                             onToggleStar = { toggleStarItem(historyItem.id) },
+                            onImageClick = { file, bitmap ->
+                                expandedImage = ExpandedHistoryImage(file = file, thumbnail = bitmap)
+                            },
+                            active = active,
                             // 禁用 item 级 fadeIn（滚动回收会重放导致闪变），只保留弹簧位移；
                             // 渐显由 pageFade 一次性驱动，完成值恒定不闪
                             modifier = Modifier
@@ -655,6 +747,13 @@ fun HistoryScreen(
         }
 
         item("footer") { Spacer(modifier = Modifier.height(16.dp)) }
+    }
+
+    expandedImage?.let { image ->
+        ExpandedHistoryImageDialog(
+            image = image,
+            onDismiss = { expandedImage = null },
+        )
     }
 }
 // ─── 分页控件 ──────────────────────────────────────────────────
@@ -712,6 +811,8 @@ private fun SwipeableHistoryCard(
     onToggleSelect: () -> Unit,
     onDelete: () -> Unit,
     onToggleStar: () -> Unit,
+    onImageClick: (File, Bitmap) -> Unit,
+    active: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val cardShape = RoundedCornerShape(16.dp)
@@ -865,6 +966,9 @@ private fun SwipeableHistoryCard(
                         context = context,
                         showActions = !selectionMode,
                         expanded = expanded,
+                        imageClickable = !selectionMode,
+                        onImageClick = onImageClick,
+                        active = active,
                     )
                 }
             }
@@ -879,6 +983,9 @@ private fun HistoryItemRow(
     context: Context,
     showActions: Boolean = true,
     expanded: Boolean = false,
+    imageClickable: Boolean = true,
+    onImageClick: (File, Bitmap) -> Unit = { _, _ -> },
+    active: Boolean = true,
 ) {
     val dateFormat = remember { SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()) }
     val scope = rememberCoroutineScope()
@@ -889,22 +996,33 @@ private fun HistoryItemRow(
     }
     var previewLoading by remember(item.id) { mutableStateOf(false) }
 
-    if (item.type == ClipboardContentType.Image && item.hasData && previewFile == null) {
+    // 仅当历史页真正可见（active）时才启动图片下载/解码；页面在屏幕外预组合时不加载，
+    // 配合 LazyColumn 只组合可视条目，做到“图片在历史列表中首次看到时加载”。
+    if (active && item.type == ClipboardContentType.Image && item.hasData && previewFile == null) {
         LaunchedEffect(item.id, item.dataName) {
             previewLoading = true
             try {
-                val config = Prefs.loadConfig(context)
-                val server = config.servers.getOrNull(config.activeServerIndex)
-                if (server != null) {
-                    val api = ServerApi(server)
-                    val safeName = item.dataName ?: "img_${item.id}"
-                    val destFile = File(context.cacheDir, "hist_${item.id}_$safeName")
-                    val downloaded = withContext(Dispatchers.IO) {
-                        api.downloadHistoryData(item.type, item.profileHash, destFile)
-                    }
-                    if (downloaded != null) {
-                        HistoryActivity.previewCache[item.id] = downloaded
-                        previewFile = downloaded
+                val safeName = item.dataName ?: "img_${item.id}"
+                val destFile = File(context.cacheDir, "hist_${item.id}_$safeName")
+                // 优先复用磁盘缓存（app 重启后内存缓存失效）
+                val cached = withContext(Dispatchers.IO) {
+                    destFile.takeIf { it.exists() && it.length() > 0 }
+                }
+                if (cached != null) {
+                    HistoryActivity.previewCache[item.id] = cached
+                    previewFile = cached
+                } else {
+                    val config = Prefs.loadConfig(context)
+                    val server = config.servers.getOrNull(config.activeServerIndex)
+                    if (server != null) {
+                        val api = ServerApi(server)
+                        val downloaded = withContext(Dispatchers.IO) {
+                            api.downloadHistoryData(item.type, item.profileHash, destFile)
+                        }
+                        if (downloaded != null) {
+                            HistoryActivity.previewCache[item.id] = downloaded
+                            previewFile = downloaded
+                        }
                     }
                 }
             } catch (_: Exception) {
@@ -1032,21 +1150,230 @@ private fun HistoryItemRow(
                 )
             }
             previewFile != null -> {
-                val bitmap = remember(previewFile) {
-                    BitmapFactory.decodeFile(previewFile!!.absolutePath)
-                }
+                val bitmap = rememberPreviewBitmap(previewFile)
                 if (bitmap != null) {
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = null,
+                        contentDescription = stringResource(R.string.history_image_preview),
                         contentScale = ContentScale.FillWidth,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 200.dp)
+                            .heightIn(max = 320.dp)
                             .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .then(
+                                if (imageClickable) {
+                                    Modifier.clickable { onImageClick(previewFile!!, bitmap) }
+                                } else {
+                                    Modifier
+                                }
+                            ),
+                    )
+                } else {
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                    BasicComponent(
+                        title = stringResource(R.string.main_loading),
+                        titleColor = BasicComponentDefaults.summaryColor(),
+                        insideMargin = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+// ─── 图片点击预览（全屏查看 + 缩放/拖动） ───────────────────────
+
+private data class ExpandedHistoryImage(
+    val file: File,
+    val thumbnail: Bitmap,
+)
+
+@Composable
+private fun rememberPreviewBitmap(file: File?): Bitmap? {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val fileKey = remember(file) {
+        file?.let { "thumb-v2:${it.absolutePath}:${it.length()}:${it.lastModified()}" }
+    }
+    val cachedBitmap = fileKey?.let { HistoryActivity.previewBitmapCache.get(it) }
+    var bitmap by remember(fileKey) { mutableStateOf(cachedBitmap) }
+    val targetWidth = remember(context, density) {
+        ((context.resources.displayMetrics.widthPixels - with(density) { 32.dp.roundToPx() })
+            .coerceAtLeast(1))
+    }
+    val targetHeight = remember(density) { with(density) { 640.dp.roundToPx() } }
+
+    LaunchedEffect(fileKey) {
+        if (file == null || fileKey == null || bitmap != null) return@LaunchedEffect
+        val decoded = withContext(Dispatchers.IO) {
+            decodeBitmapForDisplay(file, targetWidth, targetHeight)
+        }
+        if (decoded != null) {
+            HistoryActivity.previewBitmapCache.put(fileKey, decoded)
+            bitmap = decoded
+        }
+    }
+    return bitmap
+}
+
+private fun decodeBitmapForDisplay(file: File, requestWidth: Int, requestHeight: Int): Bitmap? {
+    if (!file.exists() || file.length() <= 0L) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    var sampleSize = 1
+    while (
+        bounds.outWidth / sampleSize > requestWidth * 2 ||
+        bounds.outHeight / sampleSize > requestHeight * 2
+    ) {
+        sampleSize *= 2
+    }
+    return BitmapFactory.decodeFile(
+        file.absolutePath,
+        BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        },
+    )
+}
+
+@Composable
+private fun ExpandedHistoryImageDialog(
+    image: ExpandedHistoryImage,
+    onDismiss: () -> Unit,
+) {
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val horizontalPadding = 8.dp
+    val maxImageWidth = (configuration.screenWidthDp.dp - horizontalPadding * 2).coerceAtLeast(1.dp)
+    val maxImageHeight = (configuration.screenHeightDp.dp - 48.dp).coerceAtLeast(1.dp)
+    val fullCacheKey = remember(image.file.absolutePath, image.file.length(), image.file.lastModified()) {
+        "full:${image.file.absolutePath}:${image.file.length()}:${image.file.lastModified()}"
+    }
+    var fullBitmap by remember(fullCacheKey) {
+        mutableStateOf(HistoryActivity.previewBitmapCache.get(fullCacheKey) ?: image.thumbnail)
+    }
+    val fullBitmapReady = fullBitmap !== image.thumbnail
+    var zoom by remember(fullCacheKey) { mutableFloatStateOf(1f) }
+    var pan by remember(fullCacheKey) { mutableStateOf(Offset.Zero) }
+    var imageSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    val currentZoom = rememberUpdatedState(zoom)
+    val currentPan = rememberUpdatedState(pan)
+    val currentImageSize = rememberUpdatedState(imageSize)
+
+    LaunchedEffect(fullCacheKey) {
+        val cached = HistoryActivity.previewBitmapCache.get(fullCacheKey)
+        if (cached != null) {
+            fullBitmap = cached
+            return@LaunchedEffect
+        }
+        val requestWidth = with(density) { maxImageWidth.roundToPx() }
+        val requestHeight = with(density) { maxImageHeight.roundToPx() }
+        val decoded = withContext(Dispatchers.IO) {
+            decodeBitmapForDisplay(image.file, requestWidth, requestHeight)
+        }
+        if (decoded != null) {
+            HistoryActivity.previewBitmapCache.put(fullCacheKey, decoded)
+            fullBitmap = decoded
+        }
+    }
+
+    fun clampPan(
+        value: Offset,
+        scale: Float,
+        size: androidx.compose.ui.unit.IntSize,
+    ): Offset {
+        if (size == androidx.compose.ui.unit.IntSize.Zero || scale <= 1f) return Offset.Zero
+        val maxX = size.width * (scale - 1f) / 2f
+        val maxY = size.height * (scale - 1f) / 2f
+        return Offset(
+            x = value.x.coerceIn(-maxX, maxX),
+            y = value.y.coerceIn(-maxY, maxY),
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .pointerInput(fullCacheKey) {
+                    detectTransformGestures { centroid, panChange, zoomChange, _ ->
+                        val oldZoom = currentZoom.value
+                        val newZoom = (oldZoom * zoomChange).coerceIn(1f, 5f)
+                        val scaleRatio = newZoom / oldZoom
+                        val currentPanValue = currentPan.value
+                        val currentImageSizeValue = currentImageSize.value
+                        val centeredPan = currentPanValue + (centroid - Offset(currentImageSizeValue.width / 2f, currentImageSizeValue.height / 2f)) * (1f - scaleRatio)
+                        zoom = newZoom
+                        pan = if (newZoom == 1f) Offset.Zero else clampPan(
+                            centeredPan + panChange,
+                            newZoom,
+                            currentImageSizeValue,
+                        )
+                    }
+                }
+                .pointerInput(fullCacheKey) {
+                    detectTapGestures(
+                        onDoubleTap = { position ->
+                            val targetZoom = if (currentZoom.value > 1.01f) 1f else 2.5f
+                            zoom = targetZoom
+                            pan = if (targetZoom == 1f) Offset.Zero else clampPan(
+                                (position - Offset(currentImageSize.value.width / 2f, currentImageSize.value.height / 2f)) * (1f - targetZoom),
+                                targetZoom,
+                                currentImageSize.value,
+                            )
+                        },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = fullBitmap.asImageBitmap(),
+                contentDescription = stringResource(R.string.history_image_fullscreen),
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp, vertical = 24.dp)
+                    .onSizeChanged { imageSize = it }
+                    .graphicsLayer {
+                        scaleX = zoom
+                        scaleY = zoom
+                        translationX = pan.x
+                        translationY = pan.y
+                    }
+                    .then(
+                        if (fullBitmapReady && currentZoom.value <= 1.01f) {
+                            Modifier.clickable(onClick = onDismiss)
+                        } else {
+                            Modifier
+                        }
+                    ),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 24.dp, end = 16.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "×",
+                    color = Color.White,
+                    style = MiuixTheme.textStyles.title2,
+                )
             }
         }
     }
