@@ -38,6 +38,23 @@ class ModuleEntry : XposedModule() {
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
         instance = this
         Logger.info(TAG, "onModuleLoaded: processName=${param.processName}")
+        attachFrameworkLogSink()
+    }
+
+    /** 让 Logger 的 Info/Warn/Error 也写入 LSPosed 框架日志，统一出现在管理器"模块日志"中 */
+    private fun attachFrameworkLogSink() {
+        Logger.frameworkSink = { levelChar, tag, message, throwable ->
+            val level = when (levelChar) {
+                'W' -> android.util.Log.WARN
+                'E' -> android.util.Log.ERROR
+                else -> android.util.Log.INFO
+            }
+            if (throwable != null) {
+                log(level, "SyncClipboard", "[$tag] $message", throwable)
+            } else {
+                log(level, "SyncClipboard", "[$tag] $message")
+            }
+        }
     }
 
     override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
@@ -82,6 +99,7 @@ class ModuleEntry : XposedModule() {
         // 默认实现卸载全部旧 hook
         super.onHotReloaded(param)
         Logger.info(TAG, "onHotReloaded: new generation active")
+        attachFrameworkLogSink()
         // 生命周期回调不重放，手动重装 hook 与引擎
         GeneralHooker.onHotReloaded(this)
         // system_server 世代：重装 NMS 通知钩子（优先复用跨代保存的加载器）

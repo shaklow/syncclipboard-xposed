@@ -30,6 +30,14 @@ object Logger {
     @Volatile
     var maxBufferSize: Int = 2000
 
+    /**
+     * 框架日志转发挂点：由各进程 ModuleEntry 注入 LSPosed/Xposed 的 log 通道，
+     * 使 system_server / SystemUI / App 三个进程的日志统一出现在 LSPosed 模块日志中。
+     * 仅转发 Info/Warn/Error（Debug 级别留在 logcat 与内存缓冲，避免刷屏）。
+     */
+    @Volatile
+    var frameworkSink: ((levelChar: Char, tag: String, message: String, throwable: Throwable?) -> Unit)? = null
+
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
     private val buffer = ConcurrentLinkedDeque<String>()
 
@@ -56,6 +64,10 @@ object Logger {
         buffer.addLast(line)
         val limit = maxBufferSize
         while (buffer.size > limit) buffer.pollFirst()
+        // 转发到框架日志（LSPosed 模块日志，跨进程统一展示）；Debug 留在 logcat/内存避免刷屏
+        if (level != "D") {
+            runCatching { frameworkSink?.invoke(level[0], tag, message, throwable) }
+        }
     }
 
     fun debug(tag: String, message: String) {
