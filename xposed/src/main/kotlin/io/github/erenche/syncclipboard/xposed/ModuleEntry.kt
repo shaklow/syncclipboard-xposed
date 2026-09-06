@@ -4,6 +4,7 @@ import androidx.annotation.Keep
 import io.github.erenche.syncclipboard.common.PackageNames
 import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.hook.GeneralHooker
+import io.github.erenche.syncclipboard.xposed.hook.SystemNotificationHooker
 import io.github.erenche.syncclipboard.xposed.sync.SyncEngine
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
@@ -47,8 +48,23 @@ class ModuleEntry : XposedModule() {
         GeneralHooker.hook(this, param)
     }
 
+    override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
+        Logger.info(TAG, "onSystemServerStarting: installing NMS notification hook")
+        // 钩住 NotificationManagerService 截获所有通知，验证码自动上传不再依赖 App 进程存活
+        try {
+            SystemNotificationHooker.install(this, param.classLoader)
+        } catch (e: Throwable) {
+            Logger.error(TAG, "SystemNotificationHooker.install failed", e)
+        }
+    }
+
     override fun onHotReloading(param: XposedModuleInterface.HotReloadingParam): Boolean {
         Logger.info(TAG, "onHotReloading: tearing down old generation")
+        // 把 system_server 开机时可加载 NMS 的类加载器跨代保存，供新世代重装钩子复用
+        try {
+            SystemNotificationHooker.bootClassLoader?.let { param.setSavedInstanceState(it) }
+        } catch (_: Throwable) {
+        }
         return try {
             // SystemUI 进程：完整拆除引擎，清除模块对系统对象的所有引用
             if (SyncEngine.isInitialized()) {
@@ -68,5 +84,14 @@ class ModuleEntry : XposedModule() {
         Logger.info(TAG, "onHotReloaded: new generation active")
         // 生命周期回调不重放，手动重装 hook 与引擎
         GeneralHooker.onHotReloaded(this)
+        // system_server 世代：重装 NMS 通知钩子（优先复用跨代保存的加载器）
+        if (param.isSystemServer()) {
+            Logger.info(TAG, "onHotReloaded: re-installing NMS notification hook (system_server)")
+            try {
+                SystemNotificationHooker.install(this, param.getSavedInstanceState() as? ClassLoader)
+            } catch (e: Throwable) {
+                Logger.error(TAG, "SystemNotificationHooker reinstall failed", e)
+            }
+        }
     }
 }

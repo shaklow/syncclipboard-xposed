@@ -282,21 +282,6 @@ fun SyncSettingsCard(context: android.content.Context) {
         } catch (_: Exception) {}
     }
 
-    /**
-     * 判断本应用的"通知访问权限"是否已授予。
-     * NotificationListenerService 的授权状态由系统管理，需通过
-     * enabled_notification_listeners 检查本服务是否被启用。
-     */
-    fun isNotificationListenerEnabled(): Boolean {
-        val flat = android.provider.Settings.Secure.getString(
-            context.contentResolver,
-            "enabled_notification_listeners"
-        ) ?: return false
-        val componentName = android.content.ComponentName(context, io.github.erenche.syncclipboard.app.receiver.NotificationListener::class.java)
-        val target = componentName.flattenToString()
-        return flat.split(":").any { it == target }
-    }
-
     // 运行时权限申请 launcher（RECEIVE_SMS 是危险权限，需要运行时申请）
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -305,16 +290,6 @@ fun SyncSettingsCard(context: android.content.Context) {
             pushConfig(config.copy(enableSmsUpload = true))
         }
         // 拒绝时保持开关关闭
-    }
-
-    // 通知访问权限设置页跳转 launcher：用户从系统设置返回后检查授权状态
-    val notifListenerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        if (isNotificationListenerEnabled()) {
-            pushConfig(config.copy(enableNotificationUpload = true))
-        }
-        // 未授权则保持开关关闭
     }
 
     // 总开关：关闭→子开关一并关闭；打开→若两个子开关都关则默认都开
@@ -376,21 +351,10 @@ fun SyncSettingsCard(context: android.content.Context) {
     }
 
     fun toggleNotificationUpload(enabled: Boolean) {
-        if (enabled) {
-            if (isNotificationListenerEnabled()) {
-                pushConfig(config.copy(enableNotificationUpload = true))
-            } else {
-                // 跳转到系统"通知访问权限"设置页，用户授权后返回时由 launcher 回调核对状态
-                try {
-                    val intent = android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                    notifListenerLauncher.launch(intent)
-                } catch (e: Exception) {
-                    Logger.warn("SettingsActivity", "Failed to open notification listener settings: ${e.message}")
-                }
-            }
-        } else {
-            pushConfig(config.copy(enableNotificationUpload = false))
-        }
+        // 通知验证码已改为 system_server 系统级截获 → SystemUI 引擎上传，
+        // 不再依赖 App 的 NotificationListenerService / 系统"通知访问权限"，
+        // 开关只控制引擎是否上传（enableNotificationUpload 由引擎端门控）。
+        pushConfig(config.copy(enableNotificationUpload = enabled))
     }
 
     Card(
@@ -509,7 +473,7 @@ fun SyncSettingsCard(context: android.content.Context) {
             summary = stringResource(R.string.setting_sms_upload_summary),
             onCheckedChange = { toggleSmsUpload(it) }
         )
-        // 通知验证码自动上传：监听所有应用通知，独立于短信开关
+        // 通知验证码自动上传：system_server 系统级截获（无需 App 通知访问权限），独立于短信开关
         SwitchPreference(
             checked = notifUpload,
             title = stringResource(R.string.setting_notification_upload),

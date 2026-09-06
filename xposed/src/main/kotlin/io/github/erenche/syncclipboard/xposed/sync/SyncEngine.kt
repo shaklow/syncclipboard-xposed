@@ -22,6 +22,7 @@ import io.github.erenche.syncclipboard.common.model.ServerConfig
 import io.github.erenche.syncclipboard.common.model.ServerType
 import io.github.erenche.syncclipboard.common.util.HashUtils
 import io.github.erenche.syncclipboard.common.util.Logger
+import io.github.erenche.syncclipboard.common.util.VerificationCodeExtractor
 import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
 import io.github.erenche.syncclipboard.xposed.api.SyncClipboardApi
@@ -275,6 +276,9 @@ class SyncEngine private constructor() {
 
         // 监听本 App 卸载：清理引擎侧数据（历史库/历史文件/下载目录/缓存）
         registerUninstallMonitor()
+
+        // 监听 system_server 转发的通知验证码（不依赖 App 进程存活的系统级截获）
+        registerNotifCaptureMonitor()
 
         // 启动 SignalR 推送连接（仅官方服务器模式生效；自动同步关闭或省电/息屏/移动网络暂停时不启动）
         if (config.enableAutoSync && !powerPauseApplied) signalRClient?.start()
@@ -578,6 +582,9 @@ class SyncEngine private constructor() {
     /** 卸载监听广播接收器（仅系统发送的 PACKAGE_FULLY_REMOVED，防止第三方伪造触发清理） */
     private var uninstallReceiver: BroadcastReceiver? = null
 
+    /** system_server 通知截获广播接收器（仅信任 system uid 发送） */
+    private var notifCaptureReceiver: BroadcastReceiver? = null
+
     private fun registerUninstallMonitor() {
         try {
             val ctx = appContext ?: return
@@ -602,6 +609,49 @@ class SyncEngine private constructor() {
         } catch (e: Exception) {
             Logger.warn(TAG, "Failed to register uninstall monitor: ${e.message}")
         }
+    }
+
+    /** 监听 system_server 转发的通知验证码广播（仅信任 system uid 发送方） */
+    private fun registerNotifCaptureMonitor() {
+        try {
+            val ctx = appContext ?: return
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action != BridgeKeys.ACTION_NOTIF_CAPTURE) return
+                    // 信任校验：发送方应为 system_server(1000)，或本模块进程（SystemUI/本 App）——
+                    // 实测 system_server 发出的广播在部分 ROM 上到达时被归属为 SystemUI 的 uid，不能只放行 1000。
+                    val uid = android.os.Binder.getCallingUid()
+                    if (uid != android.os.Process.SYSTEM_UID) {
+                        val pkgs = context.packageManager.getPackagesForUid(uid).orEmpty()
+                        if (PackageNames.SYSTEM_UI !in pkgs && PackageNames.APPLICATION !in pkgs) return
+                    }
+                    val body = intent.getStringExtra(BridgeKeys.EXTRA_NOTIF_BODY) ?: return
+                    val pkg = intent.getStringExtra(BridgeKeys.EXTRA_NOTIF_PKG) ?: "?"
+                    handleCapturedBody(pkg, body)
+                }
+            }
+            androidx.core.content.ContextCompat.registerReceiver(
+                ctx, receiver,
+                IntentFilter(BridgeKeys.ACTION_NOTIF_CAPTURE),
+                androidx.core.content.ContextCompat.RECEIVER_EXPORTED
+            )
+            notifCaptureReceiver = receiver
+            Logger.info(TAG, "Notif-capture monitor registered")
+        } catch (e: Exception) {
+            Logger.warn(TAG, "Failed to register notif capture monitor: ${e.message}")
+        }
+    }
+
+    /** system_server 截获的通知正文 → 正则提取验证码后上传（受通知上传开关门控）。
+     *  正则/提取在引擎进程执行，不占用 system_server 的 NMS 热路径。 */
+    private fun handleCapturedBody(pkg: String, body: String) {
+        if (!config.enableNotificationUpload) return
+        if (!VerificationCodeExtractor.contains(body)) return
+        val code = VerificationCodeExtractor.extract(body) ?: return
+        // 引擎侧短窗去重：多个来源（system_server 截获 + App 监听器）可能重复送达同一验证码
+        if (!VerificationCodeExtractor.shouldForward(code)) return
+        Logger.info(TAG, "Captured verification code from $pkg (length=${code.length})")
+        uploadText(code)
     }
 
     /** 配置变更后重新评估移动网络暂停状态 */
@@ -660,6 +710,11 @@ class SyncEngine private constructor() {
         uninstallReceiver?.let { receiver ->
             runCatching { appContext?.unregisterReceiver(receiver) }
             uninstallReceiver = null
+        }
+        // 停止通知截获监听
+        notifCaptureReceiver?.let { receiver ->
+            runCatching { appContext?.unregisterReceiver(receiver) }
+            notifCaptureReceiver = null
         }
         // 停止 SignalR 连接
         signalRClient?.stop()

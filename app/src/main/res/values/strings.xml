@@ -182,7 +182,7 @@
     <string name="setting_sms_upload">Upload SMS Codes</string>
     <string name="setting_sms_upload_summary">Auto-upload SMS verification codes to the clipboard server</string>
     <string name="setting_notification_upload">Upload Notification Codes</string>
-    <string name="setting_notification_upload_summary">Listen to all app notifications and auto-upload verification codes (requires notification access permission)</string>
+    <string name="setting_notification_upload_summary">Auto-upload verification codes from app notifications (system-level capture, no notification access needed)</string>
     <string name="setting_language">Language</string>
     <string name="setting_language_auto">Follow system</string>
     <string name="setting_language_zh">中文</string>

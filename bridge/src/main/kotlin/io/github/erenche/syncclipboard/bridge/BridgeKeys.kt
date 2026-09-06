@@ -119,6 +119,14 @@ object BridgeKeys {
     /** 查询引擎本地数据占用大小。返回 bytes（历史库+历史文件+下载目录+上传临时文件） */
     const val GET_ENGINE_STORAGE_SIZE = "get_engine_storage_size"
 
+    // ─── 通知截获（system_server → SystemUI 引擎）────────────────
+    /** system_server 钩住 NMS，对“疑似含验证码”的通知只做廉价快筛后转发原始正文，
+     *  由 SystemUI 引擎做正则提取与上传（正则/提取不留在 system_server 热路径）。
+     *  extra: EXTRA_NOTIF_BODY（通知正文）、EXTRA_NOTIF_PKG（来源包名）。 */
+    const val ACTION_NOTIF_CAPTURE = "io.github.erenche.syncclipboard.ACTION_NOTIF_CAPTURE"
+    const val EXTRA_NOTIF_BODY = "body"
+    const val EXTRA_NOTIF_PKG = "pkg"
+
     /** 查询引擎已下载的文件（避免 app 重复走网络下载）。
      *  payload: fileName；返回 bytes（byte[]，≤2MB）+ size，无则空 Bundle */
     const val GET_DOWNLOADED_FILE = "get_downloaded_file"
