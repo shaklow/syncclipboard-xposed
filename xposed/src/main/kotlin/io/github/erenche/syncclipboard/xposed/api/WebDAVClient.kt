@@ -41,8 +41,8 @@ class WebDAVClient(
 
     companion object {
         private const val TAG = "WebDAVClient"
-        private const val CLIPBOARD_FILE = "clipboard.json"
-        private const val DATA_DIR = "data"
+        private const val CLIPBOARD_FILE = "SyncClipboard.json"
+        private const val DATA_DIR = "file"
     }
 
     private val client = HttpClient(OkHttp) {
