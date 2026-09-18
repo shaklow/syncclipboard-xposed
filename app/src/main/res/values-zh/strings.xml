@@ -81,6 +81,7 @@
     <string name="server_active">当前使用</string>
     <string name="server_set_active">设为当前服务器</string>
     <string name="server_url_required">请输入服务器地址</string>
+    <string name="server_url_invalid">请输入有效的服务器地址 (http:// 或 https://)</string>
     <string name="server_username_required">请输入用户名</string>
     <string name="server_password_required">请输入密码</string>
     <string name="server_bucket_required">请输入存储桶名称</string>

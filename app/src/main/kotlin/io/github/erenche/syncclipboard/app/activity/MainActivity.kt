@@ -161,18 +161,34 @@ private val bottomTabs = listOf(
 fun MainScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
 
-    // Push config to SystemUI on startup
+    // Recover a SystemUI-only configuration after an app-data clear before any
+    // push.  App and engine preferences intentionally live in different UIDs.
     LaunchedEffect(Unit) {
+        var configToPush = Prefs.loadConfig(context).takeIf { Prefs.isConfigInitialized(context) }
         try {
-            val config = Prefs.loadConfig(context)
-            val configJson = Json.encodeToString(AppConfig.serializer(), config)
-            val payload = android.os.Bundle().apply { putString("config", configJson) }
-            SyncClipboardBridge.with(context)
+            val reply = SyncClipboardBridge.with(context)
                 .to("com.android.systemui")
-                .key(BridgeKeys.PUSH_CONFIG)
-                .payload(payload)
-                .send()
+                .key(BridgeKeys.GET_CONFIG)
+                .await()
+            val engineConfig = reply.getString("config")?.let {
+                runCatching { Json.decodeFromString(AppConfig.serializer(), it) }.getOrNull()
+            }
+            if (!Prefs.isConfigInitialized(context) && engineConfig?.servers?.isNotEmpty() == true) {
+                Prefs.saveConfig(context, engineConfig)
+                configToPush = engineConfig
+            }
         } catch (_: Exception) {}
+        configToPush?.let { config ->
+            runCatching {
+                val configJson = Json.encodeToString(AppConfig.serializer(), config)
+                val payload = android.os.Bundle().apply { putString("config", configJson) }
+                SyncClipboardBridge.with(context)
+                    .to("com.android.systemui")
+                    .key(BridgeKeys.PUSH_CONFIG)
+                    .payload(payload)
+                    .send()
+            }
+        }
         viewModel.refreshRemoteContent()
         viewModel.checkUpdate()
     }

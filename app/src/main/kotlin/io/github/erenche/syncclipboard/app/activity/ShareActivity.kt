@@ -181,7 +181,7 @@ class ShareActivity : BaseActivity() {
             data class Prepared(val localFile: File, val displayName: String, val isImage: Boolean)
 
             val prepared = mutableListOf<Prepared>()
-            for (uri in uris) {
+            for (uri in uris.take(MAX_SHARED_ITEMS)) {
                 val display = sanitizeFileName(queryDisplayName(uri) ?: "share_${System.currentTimeMillis()}")
                 val localFile = withContext(Dispatchers.IO) { copyToCache(uri, display) }
                 if (localFile != null) {
@@ -364,10 +364,24 @@ class ShareActivity : BaseActivity() {
             val dir = File(cacheDir, "share").apply { mkdirs() }
             val dest = File(dir, "${System.currentTimeMillis()}_$displayName")
             contentResolver.openInputStream(uri)?.use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
+                dest.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var copied = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        copied += read
+                        if (copied > MAX_SHARED_FILE_BYTES) {
+                            throw java.io.IOException("Shared file exceeds ${MAX_SHARED_FILE_BYTES} bytes")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
             } ?: return null
             dest
         } catch (e: Exception) {
+            // A partially copied stream must not remain available for later upload.
+            runCatching { File(cacheDir, "share").listFiles()?.firstOrNull { it.name.endsWith("_$displayName") }?.delete() }
             Logger.error(TAG, "copyToCache failed: ${e.message}", e)
             null
         }
@@ -421,6 +435,8 @@ class ShareActivity : BaseActivity() {
         const val TAG = "ShareActivity"
         /** 单个文件上传超时（毫秒） */
         const val UPLOAD_TIMEOUT_MS = 5 * 60_000L
+        const val MAX_SHARED_ITEMS = 10
+        const val MAX_SHARED_FILE_BYTES = 100L * 1024L * 1024L
 
         /** 主页"上传文件"入口：显式传入的待上传文件 URI（content://，调用方已授权读取） */
         const val EXTRA_FILE_URI = "extra_file_uri"

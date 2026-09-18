@@ -16,10 +16,13 @@ import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.readRawBytes
+import io.ktor.utils.io.readAvailable
 import io.ktor.http.HttpMethod
 import io.ktor.http.isSuccess
+import io.ktor.http.contentLength
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.URI
@@ -274,7 +277,8 @@ class S3Client(
     override suspend fun downloadFile(
         fileName: String,
         destinationPath: String,
-        onProgress: ((Float) -> Unit)?
+        onProgress: ((Float) -> Unit)?,
+        maxBytes: Long
     ): String {
         val destFile = File(destinationPath)
         destFile.parentFile?.mkdirs()
@@ -283,8 +287,25 @@ class S3Client(
         if (!response.status.isSuccess()) {
             throw IllegalStateException("S3 downloadFile failed: ${response.status.value}")
         }
-        val bytes = response.readRawBytes()
-        destFile.writeBytes(bytes)
+        if ((response.contentLength() ?: 0L) > maxBytes) {
+            throw IllegalStateException("File exceeds configured download limit")
+        }
+        val channel = response.bodyAsChannel()
+        var copied = 0L
+        try {
+            destFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = channel.readAvailable(buffer)
+                    if (read == -1) break
+                    copied += read
+                    if (copied > maxBytes) throw IllegalStateException("File exceeds configured download limit")
+                    output.write(buffer, 0, read)
+                }
+            }
+        } finally {
+            channel.cancel(null)
+        }
         Logger.info(TAG, "File downloaded from S3: $fileName -> $destinationPath")
         return destinationPath
     }

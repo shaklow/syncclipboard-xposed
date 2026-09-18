@@ -35,3 +35,5 @@ logcat_out.txt
 modules_config.db
 modules_config.db-wal
 modules_config.db-shm
+syncclipboard_config.xml
+

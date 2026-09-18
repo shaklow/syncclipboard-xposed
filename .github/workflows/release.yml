@@ -143,7 +143,7 @@ jobs:
 
             echo "---"
             echo ""
-            echo "发布自源码仓库 [shaklow/syncclipboard-xposed](https://github.com/shaklow/syncclipboard-xposed) 的 GitHub Actions 自动构建。"
+            echo "发布自源码仓库 [${SOURCE_REPO}](https://github.com/${SOURCE_REPO}) 的 GitHub Actions 自动构建。"
             echo ""
             echo "### APK 说明"
             echo "- \`arm64-v8a\` — 64 位 ARM（主流 64 位设备）"
