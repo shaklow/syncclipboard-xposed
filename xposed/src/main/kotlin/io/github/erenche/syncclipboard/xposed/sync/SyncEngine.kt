@@ -22,6 +22,7 @@ import io.github.erenche.syncclipboard.common.model.ServerConfig
 import io.github.erenche.syncclipboard.common.model.ServerType
 import io.github.erenche.syncclipboard.common.util.HashUtils
 import io.github.erenche.syncclipboard.common.util.Logger
+import io.github.erenche.syncclipboard.common.util.SafeFileNames
 import io.github.erenche.syncclipboard.common.util.VerificationCodeExtractor
 import io.github.erenche.syncclipboard.xposed.api.ClientFactory
 import io.github.erenche.syncclipboard.xposed.api.SignalRClient
@@ -1748,8 +1749,11 @@ class SyncEngine private constructor() {
     private fun restoreRemoteFilePath(profile: ProfileDto): Boolean {
         val name = profile.dataName ?: return false
         val ctx = appContext ?: return false
-        val path = java.io.File(EngineStorage.downloadsDir(ctx), name).absolutePath
-        val file = java.io.File(path)
+        val file = SafeFileNames.childOrNull(EngineStorage.downloadsDir(ctx), name) ?: run {
+            Logger.warn(TAG, "Refusing unsafe remote file name")
+            return false
+        }
+        val path = file.absolutePath
         if (file.exists() && file.length() > 0) {
             lastRemoteFilePath = path
             Prefs.saveLastRemoteFilePath(ctx, path)
@@ -1900,7 +1904,11 @@ class SyncEngine private constructor() {
         return try {
             val uri = android.net.Uri.parse(uriString)
             val name = fileName ?: "temp_${System.currentTimeMillis()}"
-            val tempFile = java.io.File(EngineStorage.uploadTempDir(context), name)
+            val tempFile = SafeFileNames.childOrNull(EngineStorage.uploadTempDir(context), name)
+                ?: run {
+                    Logger.warn(TAG, "Refusing unsafe upload file name")
+                    return null
+                }
             context.contentResolver.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { output ->
                     input.copyTo(output)
@@ -1931,16 +1939,17 @@ class SyncEngine private constructor() {
             if (profile.hasData && profile.dataName != null) {
                 // 大文件前置拦截：超过自动下载上限（autoDownloadMaxSize）时跳过下载，
                 // 避免 SystemUI 为超大文件耗费流量/IO；内容仍会写剪贴板元数据
-                val size = profile.size ?: 0
-                if (size > config.autoDownloadMaxSize) {
+                val size = profile.size
+                if (size == null || size <= 0L || size > config.autoDownloadMaxSize) {
                     Logger.info(TAG, "downloadAndApplyContent: skip large file ${profile.dataName} " +
-                        "(${size}B > limit ${config.autoDownloadMaxSize}B), keeping clipboard text only")
+                        "(declared=${size ?: "unknown"}B, limit ${config.autoDownloadMaxSize}B), keeping clipboard text only")
                 } else {
                 val name = profile.dataName!!
-                val destPath = java.io.File(EngineStorage.downloadsDir(context), name).absolutePath
+                val destFile = SafeFileNames.childOrNull(EngineStorage.downloadsDir(context), name)
+                    ?: throw IllegalArgumentException("Unsafe remote file name")
+                val destPath = destFile.absolutePath
                 Logger.info(TAG, "downloadAndApplyContent: downloading file $name")
-                client.downloadFile(name, destPath)
-                val destFile = java.io.File(destPath)
+                client.downloadFile(name, destPath, maxBytes = config.autoDownloadMaxSize)
                 downloadedFileUri = android.net.Uri.fromFile(destFile)
                 downloadedFilePath = destPath
                 Logger.info(TAG, "File downloaded: $name -> $destPath (size=${destFile.length()})")

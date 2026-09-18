@@ -29,6 +29,7 @@ import io.ktor.client.statement.readBytes
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import io.ktor.http.contentLength
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders as KtorHttpHeaders
 import io.ktor.serialization.kotlinx.json.json
@@ -117,7 +118,8 @@ class SyncClipboardHttpClient(
     override suspend fun downloadFile(
         fileName: String,
         destinationPath: String,
-        onProgress: ((Float) -> Unit)?
+        onProgress: ((Float) -> Unit)?,
+        maxBytes: Long
     ): String {
         val destFile = File(destinationPath)
         destFile.parentFile?.mkdirs()
@@ -132,14 +134,20 @@ class SyncClipboardHttpClient(
             Logger.warn(TAG, "downloadFile: server returned ${response.status.value}")
             throw IllegalStateException("File download failed: server returned ${response.status.value}")
         }
-        // 流式写入：大文件不整体读入内存
+        // 流式写入：大文件不整体读入内存，并以实际字节数强制执行上限。
+        if ((response.contentLength() ?: 0L) > maxBytes) {
+            throw IllegalStateException("File exceeds configured download limit")
+        }
         val channel = response.bodyAsChannel()
+        var copied = 0L
         try {
             destFile.outputStream().buffered().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 while (true) {
                     val read = channel.readAvailable(buffer)
                     if (read == -1) break
+                    copied += read
+                    if (copied > maxBytes) throw IllegalStateException("File exceeds configured download limit")
                     output.write(buffer, 0, read)
                 }
             }

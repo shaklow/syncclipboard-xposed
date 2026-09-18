@@ -317,7 +317,9 @@ class SignalRClient(
                         }
                         handleMessage(obj, session)
                     } catch (e: Exception) {
-                        Logger.warn(TAG, "Failed to parse message: ${e.message}, raw=${msg.take(200)}")
+                        // SignalR payloads can contain clipboard text and history data.
+                        // Keep diagnostics useful without persisting user content in logs.
+                        Logger.warn(TAG, "Failed to parse SignalR message: ${e.message} (length=${msg.length})")
                         if (e is RuntimeException && e.message?.contains("handshake") == true) {
                             throw e
                         }
