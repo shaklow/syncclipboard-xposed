@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -93,6 +94,10 @@ class MainActivity : BaseActivity(), SyncClipboardApp.XposedServiceStateListener
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val localNetworkPermission = "android.permission.ACCESS_LOCAL_NETWORK"
+        if (checkSelfPermission(localNetworkPermission) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(localNetworkPermission), 1001)
+        }
         setContent { MainScreen(viewModel) }
         SyncClipboardApp.addXposedServiceStateListener(this)
     }
