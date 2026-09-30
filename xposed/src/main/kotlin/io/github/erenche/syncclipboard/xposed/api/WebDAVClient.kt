@@ -21,14 +21,17 @@ import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.call.body
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
+import io.ktor.http.contentLength
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import java.io.File
+import io.ktor.utils.io.readAvailable
 import java.net.URLEncoder
 
 /**
@@ -107,18 +110,40 @@ class WebDAVClient(
     override suspend fun downloadFile(
         fileName: String,
         destinationPath: String,
-        onProgress: ((Float) -> Unit)?
+        onProgress: ((Float) -> Unit)?,
+        maxBytes: Long
     ): String {
         val destFile = File(destinationPath)
         destFile.parentFile?.mkdirs()
 
         // URLEncoder 将空格编码为 +，WebDAV 路径需要 %20（与 C# Uri.EscapeDataString 一致）
         val encodedName = URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
-        val bytes = client.get("$baseUrl/$DATA_DIR/$encodedName") {
+        val response = client.get("$baseUrl/$DATA_DIR/$encodedName") {
             header(HttpHeaders.Authorization, buildAuthHeader())
-        }.body<ByteArray>()
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("WebDAV downloadFile failed: ${response.status.value}")
+        }
+        if ((response.contentLength() ?: 0L) > maxBytes) {
+            throw IllegalStateException("File exceeds configured download limit")
+        }
+        val channel = response.bodyAsChannel()
+        var copied = 0L
+        try {
+            destFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = channel.readAvailable(buffer)
+                    if (read == -1) break
+                    copied += read
+                    if (copied > maxBytes) throw IllegalStateException("File exceeds configured download limit")
+                    output.write(buffer, 0, read)
+                }
+            }
+        } finally {
+            channel.cancel(null)
+        }
 
-        destFile.writeBytes(bytes)
         Logger.info(TAG, "File downloaded: $fileName -> $destinationPath")
         return destinationPath
     }

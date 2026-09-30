@@ -8,6 +8,7 @@ import io.github.erenche.syncclipboard.common.model.HistoryItem
 import io.github.erenche.syncclipboard.common.model.HistorySyncStatus
 import io.github.erenche.syncclipboard.common.util.HashUtils
 import io.github.erenche.syncclipboard.common.util.Logger
+import io.github.erenche.syncclipboard.common.util.SafeFileNames
 import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
 import io.github.erenche.syncclipboard.xposed.history.db.HistoryItemEntity
 import kotlinx.coroutines.flow.Flow
@@ -616,7 +617,14 @@ class HistoryService(context: Context) {
     private fun copyToHistoryDir(sourceUri: String, fileName: String?, hash: String): String? {
         return try {
             val name = fileName ?: "file_$hash"
-            val dest = File(historyDir, "${hash}_${name}")
+            if (!SafeFileNames.isSafeFileName(name)) {
+                Logger.warn(TAG, "Refusing unsafe history file name")
+                return null
+            }
+            val safeHash = hash.filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+                .take(80)
+                .ifBlank { "file" }
+            val dest = SafeFileNames.childOrNull(historyDir, "${safeHash}_$name") ?: return null
             if (sourceUri.startsWith("content://")) {
                 val uri = android.net.Uri.parse(sourceUri)
                 ctx.contentResolver.openInputStream(uri)?.use { input ->

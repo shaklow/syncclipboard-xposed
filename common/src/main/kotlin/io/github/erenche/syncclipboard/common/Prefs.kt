@@ -17,6 +17,11 @@ object Prefs {
 
     private const val PREFS_NAME = "syncclipboard_config"
     const val KEY_CONFIG = "app_config"
+    /**
+     * Distinguishes an explicit empty configuration (user deleted all servers)
+     * from a freshly installed/cleared app that has never owned a configuration.
+     */
+    private const val KEY_CONFIG_INITIALIZED = "config_initialized"
     private const val KEY_SERVERS = "servers"
     private const val KEY_ACTIVE_SERVER = "active_server_index"
     private const val KEY_HISTORY_LAST_SYNC_TIME = "history_last_sync_time"
@@ -50,8 +55,16 @@ object Prefs {
      */
     fun saveConfig(context: Context, config: AppConfig) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_CONFIG, json.encodeToString(config)).apply()
+        prefs.edit()
+            .putString(KEY_CONFIG, json.encodeToString(config))
+            .putBoolean(KEY_CONFIG_INITIALIZED, true)
+            .apply()
     }
+
+    /** Whether this process has explicitly persisted a configuration. */
+    fun isConfigInitialized(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_CONFIG_INITIALIZED, false)
 
     /** 注册配置变更监听（KEY_CONFIG 变化时回调） */
     fun registerConfigListener(context: Context, listener: SharedPreferences.OnSharedPreferenceChangeListener) {

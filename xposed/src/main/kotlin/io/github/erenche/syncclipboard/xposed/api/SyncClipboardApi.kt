@@ -24,7 +24,12 @@ interface SyncClipboardApi {
     suspend fun putClipboard(profile: ProfileDto)
 
     /** 下载文件到指定路径 */
-    suspend fun downloadFile(fileName: String, destinationPath: String, onProgress: ((Float) -> Unit)? = null): String
+    suspend fun downloadFile(
+        fileName: String,
+        destinationPath: String,
+        onProgress: ((Float) -> Unit)? = null,
+        maxBytes: Long = Long.MAX_VALUE
+    ): String
 
     /** 上传文件。
      *  @param onProgress 字节级上传进度回调（sentBytes, totalBytes），totalBytes 未知时为 0 */

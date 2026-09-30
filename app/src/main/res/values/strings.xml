@@ -81,6 +81,7 @@
     <string name="server_active">Active</string>
     <string name="server_set_active">Set as active server</string>
     <string name="server_url_required">Server URL is required</string>
+    <string name="server_url_invalid">Please enter a valid server URL (http:// or https://)</string>
     <string name="server_username_required">Username is required</string>
     <string name="server_password_required">Password is required</string>
     <string name="server_bucket_required">Bucket name is required</string>

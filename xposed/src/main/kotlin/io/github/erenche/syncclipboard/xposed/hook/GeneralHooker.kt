@@ -47,7 +47,6 @@ object GeneralHooker : PackageHooker() {
     fun onHotReloaded(module: XposedModule) {
         Logger.info(TAG, "onHotReloaded() re-installing hooks")
         hookCleartextTrafficPermitted(module)
-
         val app = currentApplication() ?: run {
             Logger.warn(TAG, "onHotReloaded: Application not available yet")
             return
@@ -75,7 +74,7 @@ object GeneralHooker : PackageHooker() {
         null
     }
 
-    /** 钩住 NetworkSecurityPolicy.isCleartextTrafficPermitted，允许明文 HTTP 流量 */
+    /** 钩住 NetworkSecurityPolicy.isCleartextTrafficPermitted，允许明文 HTTP 流量（支持局域网自建服务） */
     private fun hookCleartextTrafficPermitted(module: XposedModule) {
         try {
             val clazz = Class.forName("android.security.NetworkSecurityPolicy")
@@ -90,4 +89,5 @@ object GeneralHooker : PackageHooker() {
             Logger.warn(TAG, "Failed to hook NetworkSecurityPolicy: ${e.message}")
         }
     }
+
 }
