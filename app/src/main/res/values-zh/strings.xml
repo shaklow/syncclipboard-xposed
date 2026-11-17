@@ -152,6 +152,8 @@
     <string name="setting_systemui_local_network">SystemUI 局域网访问兼容</string>
     <string name="setting_systemui_local_network_summary">允许 SystemUI 在 Android 17 及以上连接局域网服务器，独立于自动同步开关。安装后需启用 Android 系统作用域并重启设备，影响整个 SystemUI UID。</string>
     <string name="setting_systemui_local_network_unsupported_summary">仅支持 Android 17（API 37）及以上，当前系统无法启用。</string>
+    <string name="setting_systemui_internet">SystemUI 网络权限兼容（INTERNET）</string>
+    <string name="setting_systemui_internet_summary">为 SystemUI 补上 INTERNET 权限（inet 补充组），使同步引擎在 SystemUI 未声明该权限的 ROM 上也能联网。仅影响 com.android.systemui，独立于自动同步开关。需启用 Android 系统作用域；修改后需重启 SystemUI 或设备生效。</string>
 
     <!-- 同步设置 -->
     <string name="setting_auto_sync">自动同步</string>
@@ -364,5 +366,10 @@
     <string name="local_network_restart_required">系统服务未响应，请检查 LSPosed 中的 Android 作用域并重启设备。</string>
     <string name="local_network_waiting">等待可用的框架权限接口及其写入线程。</string>
     <string name="local_network_failed">兼容性开关保存失败或内核权限校验失败，正在重试，请检查模块日志。</string>
+    <string name="internet_access_verified">当前 SystemUI 进程已具备 inet 组，可以正常联网。</string>
+    <string name="internet_access_disabled">INTERNET 兼容已关闭，SystemUI 保持原始权限。</string>
+    <string name="internet_access_restart_required">已启用。请确认 LSPosed 中已勾选 Android 系统作用域，并重启 SystemUI 或设备后生效。</string>
+    <string name="internet_access_waiting">等待系统服务钩子与 SystemUI 状态回报。</string>
+    <string name="internet_access_failed">兼容开关保存失败或系统钩子不可用，正在重试，请检查模块日志。</string>
     <string name="config_remote_storage_error">SystemUI 无法保存设置，原数据已保留，正在自动重试。</string>
 </resources>

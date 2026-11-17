@@ -6,6 +6,7 @@ import io.github.erenche.syncclipboard.common.util.Logger
 import io.github.erenche.syncclipboard.xposed.hook.GeneralHooker
 import io.github.erenche.syncclipboard.xposed.hook.SystemNotificationHooker
 import io.github.erenche.syncclipboard.xposed.hook.SystemLocalNetworkHooker
+import io.github.erenche.syncclipboard.xposed.hook.SystemUiInternetHooker
 import io.github.erenche.syncclipboard.xposed.sync.SyncEngine
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
@@ -72,6 +73,8 @@ class ModuleEntry : XposedModule() {
         systemServerProcess = true
         runCatching { SystemLocalNetworkHooker.install(this, param.classLoader) }
             .onFailure { Logger.warn(TAG, "SystemUI local-network hook unavailable: ${it.message}") }
+        runCatching { SystemUiInternetHooker.install(this, param.classLoader) }
+            .onFailure { Logger.warn(TAG, "SystemUI INTERNET hook unavailable: ${it.message}") }
         Logger.info(TAG, "onSystemServerStarting: installing NMS notification hook")
         // 钩住 NotificationManagerService 截获所有通知，验证码自动上传不再依赖 App 进程存活
         try {
@@ -87,6 +90,7 @@ class ModuleEntry : XposedModule() {
         try {
             if (systemServerProcess) {
                 val state = hashMapOf<String, Any>("localNetwork" to SystemLocalNetworkHooker.detachForReload())
+                state["internet"] = SystemUiInternetHooker.detachForReload()
                 SystemNotificationHooker.bootClassLoader?.let { state["bootLoader"] = it }
                 param.setSavedInstanceState(state)
             }
@@ -121,6 +125,7 @@ class ModuleEntry : XposedModule() {
                 val saved = state as? Map<*, *>
                 val loader = saved?.get("bootLoader") as? ClassLoader ?: state as? ClassLoader
                 SystemLocalNetworkHooker.install(this, loader, saved?.get("localNetwork") as? Map<*, *>)
+                SystemUiInternetHooker.install(this, loader, saved?.get("internet") as? Map<*, *>)
                 SystemNotificationHooker.install(this, loader)
             } catch (e: Throwable) {
                 Logger.error(TAG, "SystemNotificationHooker reinstall failed", e)

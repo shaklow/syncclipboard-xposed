@@ -28,6 +28,8 @@
 
 为 **`com.android.systemui`** 启用本模块。
 
+兼容性修复（Android 17 局域网访问，以及 SystemUI 未声明 INTERNET 的 ROM）另需启用 **Android 系统 / `system_server`** 作用域。两项开关位于 App 的「设置 → 兼容性设置」，修改后需重启 SystemUI 或设备。
+
 ## 架构
 
 同步引擎（`SyncEngine`）运行在 `com.android.systemui` 进程，通过系统 `ClipboardManager` 监听全局剪贴板变化；配套 App 经 `SyncClipboardBridge`（广播 IPC）与引擎通信。分享上传与预览下载由 App 进程直接执行，引擎维护历史库与远端内容。

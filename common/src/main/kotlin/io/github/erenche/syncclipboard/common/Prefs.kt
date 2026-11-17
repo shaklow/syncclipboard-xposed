@@ -51,7 +51,8 @@ object Prefs {
             configStorageError = true
             Logger.warn("Prefs", "Config storage unavailable: ${e.javaClass.simpleName}")
             DEFAULT_APP_CONFIG.copy(enableAutoSync = false, enableBackgroundUpload = false,
-                enableBackgroundDownload = false, enableSystemUiLocalNetworkAccess = false)
+                enableBackgroundDownload = false, enableSystemUiLocalNetworkAccess = false,
+                enableSystemUiInternetAccess = false)
         }
     }
 
