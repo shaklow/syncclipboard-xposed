@@ -33,6 +33,7 @@ import io.github.erenche.syncclipboard.xposed.BuildConfig
 import io.github.erenche.syncclipboard.xposed.history.EngineStorage
 import io.github.erenche.syncclipboard.xposed.history.HistoryService
 import io.github.erenche.syncclipboard.xposed.history.db.AppDatabase
+import io.github.erenche.syncclipboard.xposed.hook.SystemUiProcess
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -234,7 +235,7 @@ class SyncEngine private constructor() {
         }
         appContext = context.applicationContext
         processName = getProcessName(context)
-        Logger.info(TAG, "initialize() process=$processName")
+        Logger.info(TAG, "initialize() process=$processName inet=${SystemUiProcess.hasInetGroup}")
 
         // Debug 构建开启严格模式：主线程磁盘/网络违规与资源泄露（含 PFD）告警到 logcat
         if (BuildConfig.DEBUG) {
@@ -2439,7 +2440,7 @@ class SyncEngine private constructor() {
         return try {
             check(io.github.erenche.syncclipboard.bridge.ConfigRevisionPolicy.accepts(revision, applied))
             val raw = requireNotNull(data.getString("config"))
-            val next = Json.decodeFromString(AppConfig.serializer(), raw)
+            val next = json.decodeFromString(AppConfig.serializer(), raw)
             check(revision != applied || next == config) { "Config revision conflict" }
             if (next != config || revision != applied) {
                 Prefs.saveConfig(context, next)
@@ -2449,12 +2450,14 @@ class SyncEngine private constructor() {
             Bundle().apply {
                 putBoolean("applied", true)
                 putLong("revision", revision)
+                putBoolean("inetGroup", SystemUiProcess.hasInetGroup)
             }
         } catch (e: Exception) {
             Logger.warn(TAG, "Config not applied: ${e.javaClass.simpleName}")
             Bundle().apply {
                 putBoolean("applied", false)
                 putLong("revision", applied)
+                putBoolean("inetGroup", SystemUiProcess.hasInetGroup)
                 if (Prefs.configStorageError) putString("error", "storage_unavailable")
             }
         }
@@ -2472,7 +2475,7 @@ class SyncEngine private constructor() {
                 if (Prefs.getPrefs(context).getLong("applied_app_revision", 0) > 0) return@onCommand
                 val configJson = data.getString("config") ?: return@onCommand
                 try {
-                    val newConfig = Json.decodeFromString(AppConfig.serializer(), configJson)
+                    val newConfig = json.decodeFromString(AppConfig.serializer(), configJson)
                     Prefs.saveConfig(context, newConfig)
                     onConfigChanged(newConfig)
                 } catch (e: Exception) {

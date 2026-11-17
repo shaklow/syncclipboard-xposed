@@ -37,6 +37,7 @@ import io.github.erenche.syncclipboard.app.compose.preference.rememberBooleanPre
 import io.github.erenche.syncclipboard.app.util.AppLangUtils
 import io.github.erenche.syncclipboard.app.util.resolveLanguageName
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
+import io.github.erenche.syncclipboard.bridge.InternetAccessState
 import io.github.erenche.syncclipboard.bridge.SyncClipboardBridge
 import io.github.erenche.syncclipboard.common.PackageNames
 import io.github.erenche.syncclipboard.common.Prefs
@@ -551,6 +552,27 @@ private fun CompatibilitySettingsCard(context: android.content.Context) {
                         }
                     }.onFailure { Logger.warn("Settings", "Failed to update LAN compatibility setting", it) }
                 }
+            }
+        )
+        SwitchPreference(
+            checked = config.enableSystemUiInternetAccess,
+            title = stringResource(R.string.setting_systemui_internet),
+            summary = stringResource(R.string.setting_systemui_internet_summary) + "\n" + stringResource(
+                when (syncState.internet) {
+                    InternetAccessState.VERIFIED -> R.string.internet_access_verified
+                    InternetAccessState.DISABLED -> R.string.internet_access_disabled
+                    InternetAccessState.RESTART_REQUIRED -> R.string.internet_access_restart_required
+                    InternetAccessState.FAILED -> R.string.internet_access_failed
+                    else -> R.string.internet_access_waiting
+                }
+            ),
+            onCheckedChange = { enabled ->
+                runCatching {
+                    val newConfig = Prefs.loadConfig(context).copy(enableSystemUiInternetAccess = enabled)
+                    if (io.github.erenche.syncclipboard.app.ConfigSyncCoordinator.save(context, newConfig)) {
+                        config = newConfig
+                    }
+                }.onFailure { Logger.warn("Settings", "Failed to update INTERNET compatibility setting", it) }
             }
         )
     }

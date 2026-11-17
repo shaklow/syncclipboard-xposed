@@ -70,7 +70,9 @@ data class AppConfig(
      *  WebDAV/S3 模式忽略此选项，始终走轮询。 */
     val enableSignalRPush: Boolean = true,
     /** Android 17 局域网兼容：为 SystemUI 补充网络权限。 */
-    val enableSystemUiLocalNetworkAccess: Boolean = true
+    val enableSystemUiLocalNetworkAccess: Boolean = true,
+    /** 为 SystemUI 补充 INTERNET（AID_INET 组），兼容 SystemUI manifest 未声明该权限的 ROM。 */
+    val enableSystemUiInternetAccess: Boolean = true
 )
 
 /**

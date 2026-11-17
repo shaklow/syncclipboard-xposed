@@ -28,6 +28,8 @@ An LSposed/Xposed module that syncs clipboard content between devices via [SyncC
 
 Enable this module for **`com.android.systemui`**.
 
+The compatibility fixes (Android 17 local-network access, and INTERNET for ROMs whose SystemUI does not declare it) additionally require the **Android system / `system_server`** scope. Both can be toggled under *Settings → Compatibility Settings*; restart SystemUI (or the device) after changing them.
+
 ## Architecture
 
 The sync engine (`SyncEngine`) runs inside the `com.android.systemui` process and listens to global clipboard changes via the system `ClipboardManager`; the companion app talks to it through `SyncClipboardBridge` (broadcast IPC). Share uploads and preview downloads are performed directly by the app process, while the engine maintains the history database and remote content.

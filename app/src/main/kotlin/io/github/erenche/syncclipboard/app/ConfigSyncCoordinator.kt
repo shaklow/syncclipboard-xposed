@@ -9,6 +9,10 @@ import androidx.annotation.StringRes
 import io.github.erenche.syncclipboard.app.util.AppLangUtils
 import io.github.erenche.syncclipboard.bridge.BridgeKeys
 import io.github.erenche.syncclipboard.bridge.ConfigRevisionPolicy
+import io.github.erenche.syncclipboard.bridge.InternetAccessBridge
+import io.github.erenche.syncclipboard.bridge.InternetAccessState
+import io.github.erenche.syncclipboard.bridge.InternetAccessStatus
+import io.github.erenche.syncclipboard.bridge.InternetAccessStatusPolicy
 import io.github.erenche.syncclipboard.bridge.LocalNetworkAccessBridge
 import io.github.erenche.syncclipboard.bridge.LocalNetworkState
 import io.github.erenche.syncclipboard.bridge.LocalNetworkStatus
@@ -33,7 +37,8 @@ import kotlinx.serialization.json.Json
 enum class ConfigApplyState { SAVED, APPLYING, APPLIED, PENDING, STORAGE_ERROR, REMOTE_STORAGE_ERROR }
 data class ConfigSyncState(
     val config: ConfigApplyState = ConfigApplyState.SAVED,
-    val network: LocalNetworkState = LocalNetworkState.UNKNOWN
+    val network: LocalNetworkState = LocalNetworkState.UNKNOWN,
+    val internet: InternetAccessState = InternetAccessState.UNKNOWN
 )
 
 /** 串行同步最新配置，生效失败时保留本地设置并重试。 */
@@ -96,17 +101,37 @@ object ConfigSyncCoordinator {
                                 result.getBoolean("readbackFailed"), result.getBoolean("storageFailed")))
                     }
                     if (Prefs.configRevision(app) != revision) continue
-                    mutableState.value = mutableState.value.copy(network = network)
+                    val systemUiHasInetGroup = if (reply.containsKey("inetGroup"))
+                        reply.getBoolean("inetGroup") else null
+                    val internet = if (config.enableSystemUiInternetAccess && systemUiHasInetGroup == true) {
+                        // SystemUI 自带 INTERNET，无需等待系统侧回执；后台仍同步一次开关状态。
+                        InternetAccessBridge.send(app, true)
+                        InternetAccessState.VERIFIED
+                    } else {
+                        val result = runCatching {
+                            InternetAccessBridge.status(app, config.enableSystemUiInternetAccess)
+                        }.getOrElse { if (it is CancellationException) throw it else Bundle.EMPTY }
+                        InternetAccessStatusPolicy.classify(config.enableSystemUiInternetAccess,
+                            if (result.isEmpty) null else InternetAccessStatus(
+                                enabled = result.getBoolean("enabled"),
+                                hookInstalled = result.getBoolean("hooks"),
+                                storageFailed = result.getBoolean("storageFailed")),
+                            systemUiHasInetGroup)
+                    }
+                    mutableState.value = mutableState.value.copy(network = network, internet = internet)
                     val failureMessage = when {
                         configState == ConfigApplyState.REMOTE_STORAGE_ERROR -> R.string.config_remote_storage_error
                         configState == ConfigApplyState.PENDING -> R.string.config_pending
                         network == LocalNetworkState.FAILED -> R.string.local_network_failed
                         network == LocalNetworkState.RESTART_REQUIRED -> R.string.local_network_restart_required
+                        internet == InternetAccessState.FAILED -> R.string.internet_access_failed
+                        internet == InternetAccessState.RESTART_REQUIRED -> R.string.internet_access_restart_required
                         else -> null
                     }
                     failureMessage?.let { notifyFailure(app, revision, it) }
                     if (applied && network in setOf(LocalNetworkState.UNSUPPORTED,
-                            LocalNetworkState.VERIFIED, LocalNetworkState.DISABLED)) {
+                            LocalNetworkState.VERIFIED, LocalNetworkState.DISABLED) &&
+                        internet in setOf(InternetAccessState.VERIFIED, InternetAccessState.DISABLED)) {
                         failureRevision = null
                         reportedFailures.clear()
                         break

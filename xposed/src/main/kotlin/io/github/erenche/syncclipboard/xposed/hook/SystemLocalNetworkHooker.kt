@@ -31,7 +31,7 @@ object SystemLocalNetworkHooker {
     // Connectivity 模块经 jarjar 打包，部分 ROM 上内部类名带此前缀。
     private const val JARJAR_PREFIX = "android.net.connectivity."
     // system_server 的系统 Context 没有数据目录，不能用 SharedPreferences。
-    private val settingStore = LocalNetworkSettingStore(File("/data/system/syncclipboard_local_network"))
+    private val settingStore = ToggleSettingStore(File("/data/system/syncclipboard_local_network"))
 
     private val handles = mutableListOf<XposedInterface.HookHandle>()
     private val hookedClasses = HashSet<Class<*>>()

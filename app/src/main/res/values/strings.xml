@@ -152,6 +152,8 @@
     <string name="setting_systemui_local_network">SystemUI LAN access compatibility</string>
     <string name="setting_systemui_local_network_summary">Allow SystemUI to connect to local servers on Android 17 or later, independently of auto sync. Requires the module in the Android system scope and a device reboot after installation. Applies to the entire SystemUI UID.</string>
     <string name="setting_systemui_local_network_unsupported_summary">Requires Android 17 (API 37) or later. Unavailable on this system.</string>
+    <string name="setting_systemui_internet">SystemUI INTERNET permission compatibility</string>
+    <string name="setting_systemui_internet_summary">Adds the INTERNET permission (inet group) to the SystemUI UID so the sync engine can reach the network on ROMs whose SystemUI does not declare it. Only affects com.android.systemui, independently of auto sync. Requires the Android system scope; restart SystemUI (or the device) after changing.</string>
 
     <!-- 同步设置 -->
     <string name="setting_auto_sync">Auto Sync</string>
@@ -372,5 +374,10 @@
     <string name="local_network_restart_required">System service did not respond. Check Android scope in LSPosed and reboot.</string>
     <string name="local_network_waiting">Waiting for a supported framework permission interface and its writer thread.</string>
     <string name="local_network_failed">Could not save the compatibility setting or verify the kernel permission. Retrying automatically; check module logs.</string>
+    <string name="internet_access_verified">The running SystemUI process already has the inet group; network access is available.</string>
+    <string name="internet_access_disabled">INTERNET compatibility is off; SystemUI keeps its original permissions.</string>
+    <string name="internet_access_restart_required">Enabled. Check that the Android system scope is active in LSPosed, then restart SystemUI (or the device) so the new process receives the inet group.</string>
+    <string name="internet_access_waiting">Waiting for the system service hook and the SystemUI status report.</string>
+    <string name="internet_access_failed">Could not save the compatibility setting or install the system hook. Retrying automatically; check module logs.</string>
     <string name="config_remote_storage_error">SystemUI cannot save settings. Original data is retained; retrying automatically.</string>
 </resources>
